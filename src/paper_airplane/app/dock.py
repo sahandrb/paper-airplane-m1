@@ -13,6 +13,7 @@ from paper_airplane.app.prelaunch import (
     readout_lines,
     slider_value,
 )
+from paper_airplane.trails import DOCK_HINT
 from paper_airplane.app.theme import ACCENT, DIM, OK, PANEL, PANEL_ALPHA, TEXT, WARNING, label_font, number_font
 from paper_airplane.config import Config
 
@@ -34,6 +35,9 @@ def dock_hits() -> tuple[HitBox, ...]:
         HitBox("preset-d", pygame.Rect(220, 82, 64, 26)),
         HitBox("slider-v0", pygame.Rect(16, 128, DOCK_WIDTH - 32, 22)),
         HitBox("slider-gamma", pygame.Rect(16, 176, DOCK_WIDTH - 32, 22)),
+        HitBox("launch", pygame.Rect(16, 214, 84, 24)),
+        HitBox("reset", pygame.Rect(106, 214, 84, 24)),
+        HitBox("restart", pygame.Rect(196, 214, 88, 24)),
     )
 
 
@@ -67,6 +71,8 @@ def draw_dock(
     *,
     landing_range_m: float | None,
     flight_time_s: float | None,
+    speed: float = 1.0,
+    show_readouts: bool = True,
 ) -> None:
     """Buttons, sliders, and readouts. Call this after the airplane so the numbers stay visible."""
     _draw_modes(screen, inputs)
@@ -80,18 +86,33 @@ def draw_dock(
         config.gamma0_min_deg,
         config.gamma0_max_deg,
     )
-    font = number_font(15)
-    lines = readout_lines(
-        inputs,
-        config,
-        landing_range_m=landing_range_m,
-        flight_time_s=flight_time_s,
+    _button(screen, _track("launch"), "Launch", False, ACCENT)
+    _button(screen, _track("reset"), "RESET", False, ACCENT)
+    _button(screen, _track("restart"), "RESTART", False, ACCENT)
+    hint_font = label_font(13)
+    hint_lines = _wrap(DOCK_HINT, hint_font, DOCK_WIDTH - 32)
+    readout_font = number_font(15)
+    lines = (
+        readout_lines(
+            inputs,
+            config,
+            landing_range_m=landing_range_m,
+            flight_time_s=flight_time_s,
+        )
+        if show_readouts
+        else []
     )
-    block_h = len(lines) * 18 + 12
+    block_h = 22 + len(hint_lines) * 16 + len(lines) * 18 + 12
     y = screen.get_height() - block_h - 14
     _backing(screen, pygame.Rect(8, y - 6, DOCK_WIDTH - 16, block_h))
+    screen.blit(number_font(14).render(f"{speed:g}×", True, TEXT), (16, y))
+    y += 20
+    for line in hint_lines:
+        screen.blit(hint_font.render(line, True, DIM), (16, y))
+        y += 16
+    y += 4
     for line in lines:
-        surf = font.render(line, True, TEXT)
+        surf = readout_font.render(line, True, TEXT)
         screen.blit(surf, (16, y))
         y += surf.get_height() + 2
 
@@ -102,7 +123,7 @@ def draw_buckle_banner(screen: pygame.Surface, inputs: LaunchInputs) -> None:
     if warning is None:
         return
     x = DOCK_WIDTH + 16
-    max_width = screen.get_width() - x - 16
+    max_width = screen.get_width() - x - 276
     font = label_font(15)
     lines = _wrap(warning, font, max_width)
     width = max(font.size(line)[0] for line in lines) + 20

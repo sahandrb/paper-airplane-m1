@@ -1,6 +1,6 @@
-"""Pygame shell: dusk field, live pre-launch pose, and the About panel.
+"""Pygame shell: pre-launch pose, playback, trails, and the results strip.
 
-Playback, trails, and the later analysis views are not in this loop.
+Phugoid, Monte Carlo, the heatmap, and CSV export are a later phase.
 """
 
 from __future__ import annotations
@@ -15,8 +15,17 @@ import pygame
 from paper_airplane.app.about import ABOUT_LINES, CAPTION, CREDIT, FOOTER, HINT
 from paper_airplane.app.actors import draw_pose, draw_preview_path, load_flight_art
 from paper_airplane.app.background import draw_world, load_scenery, project_root
-from paper_airplane.app.camera import prelaunch_camera
+from paper_airplane.app.camera import follow_camera, prelaunch_camera
 from paper_airplane.app.dock import draw_buckle_banner, draw_dock, draw_dock_panel, hit_test, value_from_pointer
+from paper_airplane.app.hud import (
+    draw_legend,
+    draw_reference_ground,
+    draw_results,
+    draw_telemetry,
+    draw_trails,
+    legend_scroll_hit,
+    result_hits,
+)
 from paper_airplane.app.prelaunch import (
     DOCK_WIDTH,
     LaunchInputs,
@@ -36,7 +45,19 @@ from paper_airplane.app.theme import (
     label_font_fitting,
 )
 from paper_airplane.config import DEFAULT_CONFIG, Config
-from paper_airplane.simulation import Trajectory, preview
+from paper_airplane.playback import advance_time, cycle_speed, launch_sample, points_until, sample_at
+from paper_airplane.plots import write_reference_plots, write_run_path
+from paper_airplane.simulation import Trajectory, cases_abcd, preview
+from paper_airplane.trails import (
+    EXPORT_NOTE,
+    Session,
+    add_finished_reference,
+    begin_trail,
+    cleared,
+    paint_active,
+    returned,
+    scroll_legend,
+)
 
 _TARGET_FPS = 60
 
@@ -86,7 +107,8 @@ def _loop(config: Config, *, frame_limit: int | None, splash_s: float) -> int:
         print(message)
     camera = prelaunch_camera(config)
     inputs = default_inputs(config)
-    trajectory, cache_key = _refresh_preview(None, None, inputs, config)
+    preview_path, cache_key = _refresh_preview(None, None, inputs, config)
+    session = Session()
     dragging: str | None = None
     clock = pygame.time.Clock()
     showing_splash = splash_s > 0.0
@@ -96,6 +118,7 @@ def _loop(config: Config, *, frame_limit: int | None, splash_s: float) -> int:
     frames = 0
 
     while True:
+        dt = min(clock.tick(_TARGET_FPS) / 1000.0, 0.05)
         if showing_splash and time.perf_counter() >= splash_deadline:
             showing_splash = False
         for event in pygame.event.get():
@@ -104,20 +127,35 @@ def _loop(config: Config, *, frame_limit: int | None, splash_s: float) -> int:
             if showing_splash and event.type in (pygame.KEYDOWN, pygame.MOUSEBUTTONDOWN):
                 showing_splash = False
                 continue
+            if event.type == pygame.MOUSEWHEEL and legend_scroll_hit(pygame.mouse.get_pos()):
+                session.book = scroll_legend(session.book, -event.y, config)
+                continue
             locked = about_open or quit_prompt
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and not locked:
-                inputs, dragging = _on_pointer(inputs, event.pos, config)
+                inputs, session, dragging, finished = _on_click(
+                    inputs, session, event.pos, config, screen.get_width(), screen.get_height()
+                )
+                if finished:
+                    return 0
             elif event.type == pygame.MOUSEMOTION and dragging is not None and not locked:
-                inputs = _set_slider(inputs, dragging, event.pos[0], config)
+                if session.phase != "playing":
+                    inputs = _set_slider(inputs, dragging, event.pos[0], config)
             elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
                 dragging = None
             elif event.type == pygame.KEYDOWN:
-                about_open, quit_prompt, finished = _on_key(event.key, about_open, quit_prompt)
+                inputs, session, about_open, quit_prompt, finished = _on_flight_key(
+                    event.key, inputs, session, config, about_open, quit_prompt
+                )
                 if finished:
                     return 0
-                if not about_open and not quit_prompt:
-                    inputs = _apply_launch_key(event.key, inputs, config)
-        trajectory, cache_key = _refresh_preview(trajectory, cache_key, inputs, config)
+        if session.phase != "playing":
+            preview_path, cache_key = _refresh_preview(preview_path, cache_key, inputs, config)
+        session = _advance(session, dt)
+        if session.phase == "prelaunch":
+            camera = prelaunch_camera(config)
+        elif session.flight is not None:
+            played = sample_at(session.flight, session.t_sim)
+            camera = follow_camera(camera, played.r, played.h, dt, config)
         _draw_frame(
             screen,
             camera,
@@ -125,13 +163,13 @@ def _loop(config: Config, *, frame_limit: int | None, splash_s: float) -> int:
             scenery,
             art,
             inputs,
-            trajectory,
+            preview_path,
+            session,
             showing_splash=showing_splash,
             about_open=about_open,
             quit_prompt=quit_prompt,
         )
         pygame.display.flip()
-        clock.tick(_TARGET_FPS)
         frames += 1
         if frame_limit is not None and frames >= frame_limit:
             return 0
@@ -201,6 +239,157 @@ def _apply_launch_key(key: int, inputs: LaunchInputs, config: Config) -> LaunchI
     return inputs
 
 
+def _advance(session: Session, dt_s: float) -> Session:
+    """Move simulation time and grow the active trail. A finished clip freezes."""
+    if session.phase != "playing" or session.flight is None:
+        return session
+    t_final = float(session.flight.t[-1])
+    session.t_sim = advance_time(session.t_sim, dt_s, session.speed, t_final)
+    done = session.t_sim >= t_final - 1e-9
+    played = sample_at(session.flight, session.t_sim)
+    session.book = paint_active(
+        session.book,
+        points_until(session.flight, session.t_sim, (played.r, played.h)),
+        float(session.flight.r[-1]) if done else None,
+        done,
+    )
+    if done:
+        session.phase = "frozen"
+    return session
+
+
+def _launch(session: Session, inputs: LaunchInputs, config: Config) -> Session:
+    path = preview(inputs.v0_m_s, math.radians(inputs.gamma0_deg), inputs.mode, config)
+    session.book = begin_trail(session.book, inputs.v0_m_s, inputs.gamma0_deg, inputs.mode, config)
+    session.phase = "playing"
+    session.t_sim = 0.0
+    session.flight = path
+    session.flight_v0 = inputs.v0_m_s
+    session.flight_gamma_deg = inputs.gamma0_deg
+    session.flight_mode = inputs.mode
+    session.note = ""
+    return session
+
+
+def _abort(session: Session) -> Session:
+    if session.phase != "playing" or session.flight is None:
+        return session
+    played = sample_at(session.flight, session.t_sim)
+    session.book = paint_active(
+        session.book,
+        points_until(session.flight, session.t_sim, (played.r, played.h)),
+        played.r,
+        False,
+    )
+    session.phase = "frozen"
+    return session
+
+
+def _drop_cases(session: Session, config: Config) -> Session:
+    flights = cases_abcd(config)
+    speeds = {
+        "a": (flights["a"].v[0], math.degrees(flights["a"].gamma[0])),
+        "b": (flights["b"].v[0], math.degrees(flights["b"].gamma[0])),
+        "c": (flights["c"].v[0], math.degrees(flights["c"].gamma[0])),
+        "d": (flights["d"].v[0], math.degrees(flights["d"].gamma[0])),
+    }
+    book = session.book
+    for tag in ("a", "b", "c", "d"):
+        speed, glide = speeds[tag]
+        book = add_finished_reference(book, tag.upper(), float(speed), float(glide), flights[tag], config)
+    session.book = book
+    return session
+
+
+def _show_plots(session: Session) -> None:
+    folder = write_reference_plots()
+    paths = [folder / "figure1_path.png", folder / "figure2_histories.png"]
+    if session.flight is not None:
+        write_run_path(session.flight, folder)
+        paths.append(folder / "last_run_path.png")
+    for path in paths:
+        if hasattr(os, "startfile"):
+            os.startfile(path)  # type: ignore[attr-defined]
+        else:
+            print(path)
+
+
+def _on_click(
+    inputs: LaunchInputs,
+    session: Session,
+    pos: tuple[int, int],
+    config: Config,
+    width: int,
+    height: int,
+) -> tuple[LaunchInputs, Session, str | None, bool]:
+    if session.phase == "frozen":
+        for name, rect in result_hits(width, height):
+            if rect.collidepoint(pos):
+                return _on_result(name, inputs, session, config)
+    name = hit_test(pos)
+    if name == "launch" and session.phase != "playing":
+        return inputs, _launch(session, inputs, config), None, False
+    if name == "reset":
+        return inputs, cleared(session), None, False
+    if name == "restart":
+        return inputs, returned(session), None, False
+    if session.phase == "playing":
+        return inputs, session, None, False
+    changed, dragging = _on_pointer(inputs, pos, config)
+    return changed, session, dragging, False
+
+
+def _on_result(
+    name: str,
+    inputs: LaunchInputs,
+    session: Session,
+    config: Config,
+) -> tuple[LaunchInputs, Session, str | None, bool]:
+    if name == "plots":
+        _show_plots(session)
+        return inputs, session, None, False
+    if name == "export":
+        session.note = EXPORT_NOTE
+        return inputs, session, None, False
+    if name == "reset":
+        return inputs, cleared(session), None, False
+    if name == "restart":
+        return inputs, returned(session), None, False
+    return inputs, session, None, False
+
+
+def _on_flight_key(
+    key: int,
+    inputs: LaunchInputs,
+    session: Session,
+    config: Config,
+    about_open: bool,
+    quit_prompt: bool,
+) -> tuple[LaunchInputs, Session, bool, bool, bool]:
+    if key == pygame.K_ESCAPE and session.phase == "playing" and not about_open and not quit_prompt:
+        return inputs, _abort(session), about_open, quit_prompt, False
+    about_open, quit_prompt, finished = _on_key(key, about_open, quit_prompt)
+    if finished or about_open or quit_prompt:
+        return inputs, session, about_open, quit_prompt, finished
+    if key in (pygame.K_MINUS, pygame.K_LEFTBRACKET):
+        session.speed = cycle_speed(session.speed, -1)
+        return inputs, session, about_open, quit_prompt, False
+    if key in (pygame.K_EQUALS, pygame.K_RIGHTBRACKET):
+        session.speed = cycle_speed(session.speed, 1)
+        return inputs, session, about_open, quit_prompt, False
+    if key in (pygame.K_SPACE, pygame.K_RETURN, pygame.K_KP_ENTER) and session.phase != "playing":
+        return inputs, _launch(session, inputs, config), about_open, quit_prompt, False
+    if key == pygame.K_r:
+        return inputs, cleared(session), about_open, quit_prompt, False
+    if key == pygame.K_t:
+        return inputs, returned(session), about_open, quit_prompt, False
+    if key == pygame.K_h and session.phase != "playing":
+        return inputs, _drop_cases(session, config), about_open, quit_prompt, False
+    if session.phase != "playing":
+        inputs = _apply_launch_key(key, inputs, config)
+    return inputs, session, about_open, quit_prompt, False
+
+
 def _draw_frame(
     screen: pygame.Surface,
     camera: object,
@@ -209,23 +398,75 @@ def _draw_frame(
     art: object,
     inputs: LaunchInputs,
     trajectory: Trajectory,
+    session: Session,
     *,
     showing_splash: bool,
     about_open: bool,
     quit_prompt: bool,
 ) -> None:
     draw_world(screen, camera, config, scenery)
-    draw_preview_path(screen, camera, config, trajectory)
+    draw_reference_ground(screen, camera, inputs.mode, session.book)
+    if session.phase == "prelaunch":
+        draw_preview_path(screen, camera, config, trajectory)
+    draw_trails(screen, camera, config, session.book)
     if not showing_splash:
         draw_dock_panel(screen)
-    draw_pose(screen, camera, config, art, inputs)
+    ramp_inputs = inputs
+    dart_world = None
+    dart_theta = None
+    show_arc = session.phase == "prelaunch"
+    if session.phase != "prelaunch" and session.flight is not None:
+        ramp_inputs = LaunchInputs(
+            session.flight_v0,
+            session.flight_gamma_deg,
+            "physical" if session.flight_mode == "physical" else "reference",
+        )
+        played = sample_at(session.flight, session.t_sim)
+        dart_world = (played.r, played.h)
+        dart_theta = math.degrees(played.theta)
+    draw_pose(
+        screen,
+        camera,
+        config,
+        art,
+        ramp_inputs,
+        dart_world=dart_world,
+        dart_theta_deg=dart_theta,
+        show_arc=show_arc,
+    )
     if showing_splash:
         _draw_splash(screen)
     else:
-        landing = float(trajectory.r[-1]) if inputs.mode == "physical" else None
+        landing = float(trajectory.r[-1]) if inputs.mode == "physical" and session.phase == "prelaunch" else None
         duration = float(trajectory.t[-1]) if landing is not None else None
-        draw_dock(screen, inputs, config, landing_range_m=landing, flight_time_s=duration)
+        draw_dock(
+            screen,
+            inputs,
+            config,
+            landing_range_m=landing,
+            flight_time_s=duration,
+            speed=session.speed,
+            show_readouts=session.phase == "prelaunch",
+        )
+        draw_legend(screen, session.book, config)
         draw_buckle_banner(screen, inputs)
+        sample = (
+            sample_at(session.flight, session.t_sim)
+            if session.flight is not None and session.phase != "prelaunch"
+            else launch_sample(inputs.v0_m_s, math.radians(inputs.gamma0_deg), config)
+        )
+        landed = (
+            session.phase == "frozen"
+            and session.flight_mode == "physical"
+            and session.flight is not None
+            and session.t_sim >= float(session.flight.t[-1]) - 1e-6
+        )
+        draw_telemetry(screen, camera, config, sample, session.book, landed=bool(landed))
+        if session.phase == "frozen" and session.flight is not None:
+            draw_results(screen, session.flight, session.t_sim, session.flight_mode, sample)
+        if session.note:
+            note = label_font(15).render(session.note, True, WARNING)
+            screen.blit(note, (DOCK_WIDTH + 16, screen.get_height() - 132))
         _draw_header(screen)
         if scenery.warnings or art.warnings:
             _draw_warnings(screen, scenery.warnings + art.warnings)

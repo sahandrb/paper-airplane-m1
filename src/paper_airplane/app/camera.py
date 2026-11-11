@@ -1,8 +1,7 @@
 """Screen mapping for the side view. This module stays free of the display library.
 
 Screen y grows downward. One ``pixels_per_metre`` serves both axes, so a
-loop stays a circle. Only the camera origin may ease in a later phase;
-this phase keeps the pre-launch frame fixed.
+loop stays a circle. Only the camera origin eases. The sprite angle does not.
 """
 
 from __future__ import annotations
@@ -34,6 +33,43 @@ def prelaunch_camera(config: Config) -> Camera:
         cam_x=config.prelaunch_launcher_x_frac * config.window_width_px,
         cam_y=float(config.ground_screen_y0),
     )
+
+
+def follow_camera(
+    camera: Camera,
+    cg_r_m: float,
+    cg_h_m: float,
+    dt_s: float,
+    config: Config,
+) -> Camera:
+    """Keep the CG near 32 percent of the width. Ease only this origin.
+
+    Vertical follow runs only when the CG would enter the margin. Otherwise
+    the origin eases back so ``h = 0`` sits on the ground row.
+    """
+    ppm = config.pixels_per_metre
+    target_x = config.follow_x_frac * config.window_width_px - cg_r_m * ppm
+    screen_y = camera.cam_y - cg_h_m * ppm
+    margin = config.margin_px
+    if screen_y < margin:
+        target_y = margin + cg_h_m * ppm
+    elif screen_y > config.window_height_px - margin:
+        target_y = (config.window_height_px - margin) + cg_h_m * ppm
+    else:
+        target_y = float(config.ground_screen_y0)
+    blend = _origin_blend(dt_s, config.camera_tau_s)
+    return Camera(
+        cam_x=camera.cam_x + (target_x - camera.cam_x) * blend,
+        cam_y=camera.cam_y + (target_y - camera.cam_y) * blend,
+    )
+
+
+def _origin_blend(dt_s: float, tau_s: float) -> float:
+    if tau_s <= 0.0:
+        return 1.0
+    if dt_s <= 0.0:
+        return 0.0
+    return 1.0 - math.exp(-dt_s / tau_s)
 
 
 def ground_scroll_px(cam_x: float, strip_width: int) -> int:

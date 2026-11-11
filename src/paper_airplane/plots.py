@@ -169,6 +169,27 @@ def write_reference_plots(
     return folder
 
 
+def write_run_path(
+    trajectory: Trajectory,
+    directory: Path | None = None,
+    config: Config | None = None,
+) -> Path:
+    """Save h versus r for one played run. The supervisor is not on the figure."""
+    del config
+    _ensure_headless()
+    plt = _pyplot()
+    folder = _run_folder(directory)
+    figure, axis = plt.subplots(figsize=(7.0, 4.5))
+    axis.plot(trajectory.r, trajectory.h, color=CASE_COLORS[0], linewidth=1.6)
+    axis.set_xlabel("Range, m")
+    axis.set_ylabel("Height, m")
+    axis.grid(True)
+    _footnote(figure)
+    figure.savefig(folder / "last_run_path.png")
+    plt.close(figure)
+    return folder
+
+
 def write_heatmap(
     directory: Path | None = None,
     grid: HeatmapResult | None = None,

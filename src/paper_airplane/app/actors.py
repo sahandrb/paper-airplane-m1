@@ -79,8 +79,12 @@ def draw_pose(
     config: Config,
     art: FlightArt,
     inputs: LaunchInputs,
+    *,
+    dart_world: tuple[float, float] | None = None,
+    dart_theta_deg: float | None = None,
+    show_arc: bool = True,
 ) -> None:
-    """Pillar, ramp, dart, the alpha wedge, and the scale caption."""
+    """Pillar and ramp stay in the world. The dart is on the rail or at ``dart_world``."""
     hinge = pivot_screen(camera, config)
     _blit_piece(screen, art.pillar, hinge, 0.0)
     _blit_piece(
@@ -89,8 +93,13 @@ def draw_pose(
         hinge,
         ramp_rotation_deg(inputs.gamma0_deg, config, painted=art.ramp.painted),
     )
-    _blit_piece(screen, art.dart, hinge, theta0_deg(inputs, config))
-    _draw_alpha_arc(screen, hinge, inputs, config)
+    if dart_world is None:
+        _blit_piece(screen, art.dart, hinge, theta0_deg(inputs, config))
+    else:
+        place = camera.to_screen(dart_world[0], dart_world[1], config.pixels_per_metre)
+        _blit_piece(screen, art.dart, place, theta0_deg(inputs, config) if dart_theta_deg is None else dart_theta_deg)
+    if show_arc and dart_world is None:
+        _draw_alpha_arc(screen, hinge, inputs, config)
     _draw_scale(screen, camera, config)
 
 
