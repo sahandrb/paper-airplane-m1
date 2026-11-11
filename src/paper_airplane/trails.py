@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field, replace
 
 from paper_airplane.config import Config
@@ -24,7 +25,6 @@ REFERENCE_NOTE = (
 OVERFLOW_HINT = "Oldest trail dropped."
 DOCK_HINT = "RESET clears trails. RESTART flies again and keeps them."
 PHYSICAL_HUD = "range = {range_m:.2f} m,  flight time = {flight_time_s:.2f} s"
-EXPORT_NOTE = "Export writes a CSV in the next phase."
 
 
 @dataclass(frozen=True)
@@ -39,6 +39,7 @@ class Trail:
     points: tuple[tuple[float, float], ...] = ()
     range_m: float | None = None
     complete: bool = False
+    caption: str = ""
 
 
 @dataclass(frozen=True)
@@ -81,11 +82,18 @@ def paint_active(
     points: tuple[tuple[float, float], ...],
     range_m: float | None,
     complete: bool,
+    caption: str | None = None,
 ) -> TrailBook:
     """Replace the points of the trail that is currently playing."""
     if not book.trails:
         return book
-    active = replace(book.trails[-1], points=points, range_m=range_m, complete=complete)
+    active = replace(
+        book.trails[-1],
+        points=points,
+        range_m=range_m,
+        complete=complete,
+        caption=book.trails[-1].caption if caption is None else caption,
+    )
     return replace(book, trails=book.trails[:-1] + (active,))
 
 
@@ -134,21 +142,47 @@ def visible_legend(book: TrailBook, config: Config) -> tuple[Trail, ...]:
 
 
 def legend_line(trail: Trail) -> str:
-    """One legend row. Reference range is labelled ``r(6 s)`` only when the clip finished."""
+    """One legend row. Reference and phugoid range is ``r(6 s)`` only when the clip finished."""
+    if trail.caption:
+        return trail.caption
     head = f"{trail.tag}  " if trail.tag else ""
     line = f"{head}V0={trail.v0_m_s:.2f} m/s  γ0={_degrees(trail.gamma0_deg)}"
     if trail.range_m is None:
         return line
-    if trail.mode == "reference" and trail.complete:
+    if trail.mode in ("reference", "phugoid") and trail.complete:
         return f"{line}  r(6 s)={trail.range_m:.2f} m"
     return f"{line}  r={trail.range_m:.2f} m"
 
 
+def mc_legend_line(
+    v0_m_s: float,
+    gamma0_deg: float,
+    sigma_v: float,
+    sigma_gamma_deg: float,
+    n: int,
+    mean_m: float,
+    std_m: float,
+) -> str:
+    """The single Monte Carlo row. Samples do not get rows of their own."""
+    glide = f"{gamma0_deg:.1f}".replace("-", "−")
+    if math.isnan(mean_m) or math.isnan(std_m):
+        span = "n/a"
+    else:
+        span = f"{mean_m:.2f} ± {std_m:.2f} m"
+    return (
+        f"MC  N={n}  V0={v0_m_s:.2f} ± {sigma_v:.2f} m/s  "
+        f"γ0={glide} ± {sigma_gamma_deg:.1f}°  r={span}"
+    )
+
+
 def shows_reference_ground(mode: str, book: TrailBook) -> bool:
-    """The below-ground note is on when a Reference path can cross h = 0."""
-    if mode == "reference":
+    """The below-ground note is on when a Reference or phugoid path can cross h = 0."""
+    if mode in ("reference", "phugoid"):
         return True
-    return any(trail.mode == "reference" and any(height < 0.0 for _range, height in trail.points) for trail in book.trails)
+    return any(
+        trail.mode in ("reference", "phugoid") and any(height < 0.0 for _range, height in trail.points)
+        for trail in book.trails
+    )
 
 
 def _push(book: TrailBook, trail: Trail, config: Config) -> TrailBook:

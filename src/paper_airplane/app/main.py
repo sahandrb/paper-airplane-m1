@@ -1,13 +1,11 @@
-"""Pygame shell: pre-launch pose, playback, trails, and the results strip.
-
-Phugoid, Monte Carlo, the heatmap, and CSV export are a later phase.
-"""
+"""Pygame shell: playback, phugoid, Monte Carlo, the heatmap, and export."""
 
 from __future__ import annotations
 
 import math
 import os
 import time
+from pathlib import Path
 from dataclasses import replace
 
 import pygame
@@ -18,9 +16,16 @@ from paper_airplane.app.background import draw_world, load_scenery, project_root
 from paper_airplane.app.camera import follow_camera, prelaunch_camera
 from paper_airplane.app.dock import draw_buckle_banner, draw_dock, draw_dock_panel, hit_test, value_from_pointer
 from paper_airplane.app.hud import (
+    draw_assumption,
+    draw_energy_strip,
+    draw_heatmap_view,
+    draw_hybrid,
     draw_legend,
+    draw_phugoid_notes,
+    draw_progress,
     draw_reference_ground,
     draw_results,
+    draw_scatter,
     draw_telemetry,
     draw_trails,
     legend_scroll_hit,
@@ -31,6 +36,8 @@ from paper_airplane.app.prelaunch import (
     LaunchInputs,
     apply_preset,
     default_inputs,
+    linear_model_outside,
+    solver_mode,
     step_launch,
     toggle_mode,
 )
@@ -44,16 +51,27 @@ from paper_airplane.app.theme import (
     label_font,
     label_font_fitting,
 )
+from paper_airplane.analysis import HeatmapCache, Overlays, ensure_heatmap
 from paper_airplane.config import DEFAULT_CONFIG, Config
+from paper_airplane.equilibrium import gamma_star_rad, v_star
+from paper_airplane.export import write_run_table
+from paper_airplane.linearize import hybrid_path
 from paper_airplane.playback import advance_time, cycle_speed, launch_sample, points_until, sample_at
-from paper_airplane.plots import write_reference_plots, write_run_path
-from paper_airplane.simulation import Trajectory, cases_abcd, preview
+from paper_airplane.plots import (
+    write_energy,
+    write_heatmap,
+    write_monte_histogram,
+    write_phugoid_compare,
+    write_reference_plots,
+    write_run_path,
+)
+from paper_airplane.simulation import HeatmapResult, Trajectory, cases_abcd, monte_carlo, preview
 from paper_airplane.trails import (
-    EXPORT_NOTE,
     Session,
     add_finished_reference,
     begin_trail,
     cleared,
+    mc_legend_line,
     paint_active,
     returned,
     scroll_legend,
@@ -109,6 +127,8 @@ def _loop(config: Config, *, frame_limit: int | None, splash_s: float) -> int:
     inputs = default_inputs(config)
     preview_path, cache_key = _refresh_preview(None, None, inputs, config)
     session = Session()
+    overlays = Overlays()
+    heatmap_cache = HeatmapCache()
     dragging: str | None = None
     clock = pygame.time.Clock()
     showing_splash = splash_s > 0.0
@@ -133,24 +153,47 @@ def _loop(config: Config, *, frame_limit: int | None, splash_s: float) -> int:
             locked = about_open or quit_prompt
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and not locked:
                 inputs, session, dragging, finished = _on_click(
-                    inputs, session, event.pos, config, screen.get_width(), screen.get_height()
+                    inputs,
+                    session,
+                    event.pos,
+                    config,
+                    screen.get_width(),
+                    screen.get_height(),
+                    overlays,
+                    heatmap_cache,
+                    screen,
                 )
                 if finished:
                     return 0
             elif event.type == pygame.MOUSEMOTION and dragging is not None and not locked:
                 if session.phase != "playing":
-                    inputs = _set_slider(inputs, dragging, event.pos[0], config)
+                    inputs = _set_slider(inputs, dragging, event.pos[0], config, screen.get_height())
             elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
                 dragging = None
             elif event.type == pygame.KEYDOWN:
                 inputs, session, about_open, quit_prompt, finished = _on_flight_key(
-                    event.key, inputs, session, config, about_open, quit_prompt
+                    event.key,
+                    inputs,
+                    session,
+                    config,
+                    about_open,
+                    quit_prompt,
+                    overlays,
+                    heatmap_cache,
+                    screen,
                 )
                 if finished:
                     return 0
+        if inputs.mode == "heatmap" and not showing_splash and (heatmap_cache.grid is None or heatmap_cache.force):
+            def _heatmap_progress(done: int, total: int) -> None:
+                draw_progress(screen, "Landing-range grid", 0.0 if total == 0 else done / total)
+                pygame.display.flip()
+                pygame.event.pump()
+
+            ensure_heatmap(heatmap_cache, config, _heatmap_progress)
         if session.phase != "playing":
             preview_path, cache_key = _refresh_preview(preview_path, cache_key, inputs, config)
-        session = _advance(session, dt)
+        session = _advance(session, dt, overlays)
         if session.phase == "prelaunch":
             camera = prelaunch_camera(config)
         elif session.flight is not None:
@@ -168,6 +211,8 @@ def _loop(config: Config, *, frame_limit: int | None, splash_s: float) -> int:
             showing_splash=showing_splash,
             about_open=about_open,
             quit_prompt=quit_prompt,
+            overlays=overlays,
+            heatmap=heatmap_cache.grid,
         )
         pygame.display.flip()
         frames += 1
@@ -185,7 +230,7 @@ def _refresh_preview(
     fresh = (round(inputs.v0_m_s, 5), round(inputs.gamma0_deg, 5), inputs.mode)
     if trajectory is not None and fresh == cache_key:
         return trajectory, fresh
-    path = preview(inputs.v0_m_s, math.radians(inputs.gamma0_deg), inputs.mode, config)
+    path = preview(inputs.v0_m_s, math.radians(inputs.gamma0_deg), solver_mode(inputs.mode), config)
     return path, fresh
 
 
@@ -193,23 +238,28 @@ def _on_pointer(
     inputs: LaunchInputs,
     pos: tuple[int, int],
     config: Config,
+    height: int,
 ) -> tuple[LaunchInputs, str | None]:
-    name = hit_test(pos)
-    if name == "mode-reference":
-        return replace(inputs, mode="reference"), None
-    if name == "mode-physical":
-        return replace(inputs, mode="physical"), None
+    name = hit_test(pos, mode=inputs.mode, height=height)
+    if name == "mode":
+        return toggle_mode(inputs), None
     if name is not None and name.startswith("preset-"):
         return apply_preset(inputs, name[-1], config), None
-    if name is not None and name.startswith("slider-"):
-        return _set_slider(inputs, name, pos[0], config), name
+    if name is not None and (name.startswith("slider-") or name.startswith("scatter-")):
+        return _set_slider(inputs, name, pos[0], config, height), name
     return inputs, None
 
 
-def _set_slider(inputs: LaunchInputs, name: str, x: int, config: Config) -> LaunchInputs:
-    value = value_from_pointer(name, x, config)
+def _set_slider(inputs: LaunchInputs, name: str, x: int, config: Config, height: int) -> LaunchInputs:
+    value = value_from_pointer(name, x, config, height)
     if name == "slider-v0":
         return replace(inputs, v0_m_s=value)
+    if name == "scatter-n":
+        return replace(inputs, n_throws=int(value))
+    if name == "scatter-sv":
+        return replace(inputs, sigma_v_m_s=value)
+    if name == "scatter-sg":
+        return replace(inputs, sigma_gamma_deg=value)
     return replace(inputs, gamma0_deg=value)
 
 
@@ -239,7 +289,7 @@ def _apply_launch_key(key: int, inputs: LaunchInputs, config: Config) -> LaunchI
     return inputs
 
 
-def _advance(session: Session, dt_s: float) -> Session:
+def _advance(session: Session, dt_s: float, overlays: Overlays) -> Session:
     """Move simulation time and grow the active trail. A finished clip freezes."""
     if session.phase != "playing" or session.flight is None:
         return session
@@ -247,19 +297,69 @@ def _advance(session: Session, dt_s: float) -> Session:
     session.t_sim = advance_time(session.t_sim, dt_s, session.speed, t_final)
     done = session.t_sim >= t_final - 1e-9
     played = sample_at(session.flight, session.t_sim)
+    caption = None
+    if done and session.flight_mode == "montecarlo" and overlays.scatter is not None:
+        caption = mc_legend_line(
+            overlays.v0,
+            overlays.gamma_deg,
+            overlays.sigma_v,
+            overlays.sigma_g,
+            overlays.n,
+            overlays.scatter.mean_range_m,
+            overlays.scatter.std_range_m,
+        )
     session.book = paint_active(
         session.book,
         points_until(session.flight, session.t_sim, (played.r, played.h)),
         float(session.flight.r[-1]) if done else None,
         done,
+        caption,
     )
     if done:
         session.phase = "frozen"
     return session
 
 
-def _launch(session: Session, inputs: LaunchInputs, config: Config) -> Session:
-    path = preview(inputs.v0_m_s, math.radians(inputs.gamma0_deg), inputs.mode, config)
+def _launch(
+    session: Session,
+    inputs: LaunchInputs,
+    config: Config,
+    overlays: Overlays,
+    screen: pygame.Surface | None = None,
+) -> Session:
+    if inputs.mode == "heatmap":
+        return session
+    overlays.clear()
+    if inputs.mode == "montecarlo":
+        def _monte_progress(done: int, total: int) -> None:
+            if screen is None:
+                return
+            draw_progress(screen, "Monte Carlo", 0.0 if total == 0 else done / total)
+            pygame.display.flip()
+            pygame.event.pump()
+
+        overlays.scatter = monte_carlo(
+            inputs.v0_m_s,
+            math.radians(inputs.gamma0_deg),
+            n=inputs.n_throws,
+            sigma_v=inputs.sigma_v_m_s,
+            sigma_gamma_deg=inputs.sigma_gamma_deg,
+            config=config,
+            progress=_monte_progress,
+            n_samples=48,
+        )
+        overlays.n = inputs.n_throws
+        overlays.sigma_v = inputs.sigma_v_m_s
+        overlays.sigma_g = inputs.sigma_gamma_deg
+        overlays.v0 = inputs.v0_m_s
+        overlays.gamma_deg = inputs.gamma0_deg
+    elif inputs.mode == "phugoid":
+        overlays.hybrid = hybrid_path(
+            inputs.v0_m_s - v_star(config),
+            math.radians(inputs.gamma0_deg) - gamma_star_rad(config),
+            config=config,
+        )
+    path = preview(inputs.v0_m_s, math.radians(inputs.gamma0_deg), solver_mode(inputs.mode), config)
     session.book = begin_trail(session.book, inputs.v0_m_s, inputs.gamma0_deg, inputs.mode, config)
     session.phase = "playing"
     session.t_sim = 0.0
@@ -301,17 +401,72 @@ def _drop_cases(session: Session, config: Config) -> Session:
     return session
 
 
-def _show_plots(session: Session) -> None:
+def _write_bundle(
+    session: Session,
+    inputs: LaunchInputs,
+    overlays: Overlays,
+    heatmap: HeatmapResult | None,
+    *,
+    csv: bool,
+) -> Path:
+    """Figures for the run. CSV and meta are written only for Export."""
     folder = write_reference_plots()
     paths = [folder / "figure1_path.png", folder / "figure2_histories.png"]
     if session.flight is not None:
         write_run_path(session.flight, folder)
-        paths.append(folder / "last_run_path.png")
-    for path in paths:
-        if hasattr(os, "startfile"):
-            os.startfile(path)  # type: ignore[attr-defined]
-        else:
-            print(path)
+        write_energy(session.flight, folder)
+        paths.extend((folder / "last_run_path.png", folder / "energy.png"))
+    if overlays.hybrid is not None and session.flight is not None:
+        write_phugoid_compare(session.flight, overlays.hybrid, folder)
+        paths.append(folder / "phugoid.png")
+    if overlays.scatter is not None:
+        write_monte_histogram(overlays.scatter, folder)
+        paths.append(folder / "monte_carlo_hist.png")
+    if heatmap is not None:
+        write_heatmap(folder, heatmap)
+        paths.append(folder / "heatmap.png")
+    if csv:
+        range_m = float(session.flight.r[-1]) if session.flight is not None else None
+        t_final = float(session.flight.t[-1]) if session.flight is not None else None
+        write_run_table(
+            session.flight,
+            folder,
+            v0_m_s=inputs.v0_m_s,
+            gamma0_deg=inputs.gamma0_deg,
+            mode=inputs.mode,
+            range_m=range_m,
+            t_final=t_final,
+        )
+    session.note = str(folder)
+    return folder
+
+
+def _open_path(path: Path) -> None:
+    if hasattr(os, "startfile"):
+        os.startfile(path)  # type: ignore[attr-defined]
+    else:
+        print(path)
+
+
+def _show_plots(
+    session: Session,
+    inputs: LaunchInputs,
+    overlays: Overlays,
+    heatmap: HeatmapResult | None,
+) -> None:
+    folder = _write_bundle(session, inputs, overlays, heatmap, csv=False)
+    for path in folder.glob("*.png"):
+        _open_path(path)
+
+
+def _export(
+    session: Session,
+    inputs: LaunchInputs,
+    overlays: Overlays,
+    heatmap: HeatmapResult | None,
+) -> None:
+    folder = _write_bundle(session, inputs, overlays, heatmap, csv=True)
+    _open_path(folder)
 
 
 def _on_click(
@@ -321,21 +476,29 @@ def _on_click(
     config: Config,
     width: int,
     height: int,
+    overlays: Overlays,
+    heatmap_cache: HeatmapCache,
+    screen: pygame.Surface,
 ) -> tuple[LaunchInputs, Session, str | None, bool]:
     if session.phase == "frozen":
         for name, rect in result_hits(width, height):
             if rect.collidepoint(pos):
-                return _on_result(name, inputs, session, config)
-    name = hit_test(pos)
+                return _on_result(name, inputs, session, config, overlays, heatmap_cache)
+    name = hit_test(pos, mode=inputs.mode, height=height)
+    if name == "recompute":
+        heatmap_cache.force = True
+        return inputs, session, None, False
     if name == "launch" and session.phase != "playing":
-        return inputs, _launch(session, inputs, config), None, False
+        return inputs, _launch(session, inputs, config, overlays, screen), None, False
     if name == "reset":
+        overlays.clear()
         return inputs, cleared(session), None, False
     if name == "restart":
+        overlays.clear()
         return inputs, returned(session), None, False
     if session.phase == "playing":
         return inputs, session, None, False
-    changed, dragging = _on_pointer(inputs, pos, config)
+    changed, dragging = _on_pointer(inputs, pos, config, height)
     return changed, session, dragging, False
 
 
@@ -344,16 +507,21 @@ def _on_result(
     inputs: LaunchInputs,
     session: Session,
     config: Config,
+    overlays: Overlays,
+    heatmap_cache: HeatmapCache,
 ) -> tuple[LaunchInputs, Session, str | None, bool]:
+    del config
     if name == "plots":
-        _show_plots(session)
+        _show_plots(session, inputs, overlays, heatmap_cache.grid)
         return inputs, session, None, False
     if name == "export":
-        session.note = EXPORT_NOTE
+        _export(session, inputs, overlays, heatmap_cache.grid)
         return inputs, session, None, False
     if name == "reset":
+        overlays.clear()
         return inputs, cleared(session), None, False
     if name == "restart":
+        overlays.clear()
         return inputs, returned(session), None, False
     return inputs, session, None, False
 
@@ -365,6 +533,9 @@ def _on_flight_key(
     config: Config,
     about_open: bool,
     quit_prompt: bool,
+    overlays: Overlays,
+    heatmap_cache: HeatmapCache,
+    screen: pygame.Surface,
 ) -> tuple[LaunchInputs, Session, bool, bool, bool]:
     if key == pygame.K_ESCAPE and session.phase == "playing" and not about_open and not quit_prompt:
         return inputs, _abort(session), about_open, quit_prompt, False
@@ -377,11 +548,19 @@ def _on_flight_key(
     if key in (pygame.K_EQUALS, pygame.K_RIGHTBRACKET):
         session.speed = cycle_speed(session.speed, 1)
         return inputs, session, about_open, quit_prompt, False
+    if key == pygame.K_p:
+        _show_plots(session, inputs, overlays, heatmap_cache.grid)
+        return inputs, session, about_open, quit_prompt, False
+    if key == pygame.K_e:
+        _export(session, inputs, overlays, heatmap_cache.grid)
+        return inputs, session, about_open, quit_prompt, False
     if key in (pygame.K_SPACE, pygame.K_RETURN, pygame.K_KP_ENTER) and session.phase != "playing":
-        return inputs, _launch(session, inputs, config), about_open, quit_prompt, False
+        return inputs, _launch(session, inputs, config, overlays, screen), about_open, quit_prompt, False
     if key == pygame.K_r:
+        overlays.clear()
         return inputs, cleared(session), about_open, quit_prompt, False
     if key == pygame.K_t:
+        overlays.clear()
         return inputs, returned(session), about_open, quit_prompt, False
     if key == pygame.K_h and session.phase != "playing":
         return inputs, _drop_cases(session, config), about_open, quit_prompt, False
@@ -403,12 +582,23 @@ def _draw_frame(
     showing_splash: bool,
     about_open: bool,
     quit_prompt: bool,
+    overlays: Overlays,
+    heatmap: HeatmapResult | None,
 ) -> None:
-    draw_world(screen, camera, config, scenery)
-    draw_reference_ground(screen, camera, inputs.mode, session.book)
-    if session.phase == "prelaunch":
-        draw_preview_path(screen, camera, config, trajectory)
-    draw_trails(screen, camera, config, session.book)
+    heatmap_on = inputs.mode == "heatmap" and heatmap is not None and not showing_splash
+    if heatmap_on:
+        screen.fill((8, 12, 22))
+        draw_heatmap_view(screen, heatmap, config, v0_m_s=inputs.v0_m_s, gamma0_deg=inputs.gamma0_deg)
+    else:
+        draw_world(screen, camera, config, scenery)
+        draw_reference_ground(screen, camera, inputs.mode, session.book)
+        if session.phase == "prelaunch" and inputs.mode != "heatmap":
+            draw_preview_path(screen, camera, config, trajectory)
+        if overlays.scatter is not None:
+            draw_scatter(screen, camera, config, overlays.scatter)
+        draw_trails(screen, camera, config, session.book)
+        if overlays.hybrid is not None:
+            draw_hybrid(screen, camera, config, overlays.hybrid)
     if not showing_splash:
         draw_dock_panel(screen)
     ramp_inputs = inputs
@@ -424,16 +614,17 @@ def _draw_frame(
         played = sample_at(session.flight, session.t_sim)
         dart_world = (played.r, played.h)
         dart_theta = math.degrees(played.theta)
-    draw_pose(
-        screen,
-        camera,
-        config,
-        art,
-        ramp_inputs,
-        dart_world=dart_world,
-        dart_theta_deg=dart_theta,
-        show_arc=show_arc,
-    )
+    if not heatmap_on:
+        draw_pose(
+            screen,
+            camera,
+            config,
+            art,
+            ramp_inputs,
+            dart_world=dart_world,
+            dart_theta_deg=dart_theta,
+            show_arc=show_arc,
+        )
     if showing_splash:
         _draw_splash(screen)
     else:
@@ -462,6 +653,21 @@ def _draw_frame(
             and session.t_sim >= float(session.flight.t[-1]) - 1e-6
         )
         draw_telemetry(screen, camera, config, sample, session.book, landed=bool(landed))
+        if inputs.mode == "phugoid" or session.flight_mode == "phugoid":
+            warned = linear_model_outside(
+                session.flight_v0 if session.phase != "prelaunch" else inputs.v0_m_s,
+                session.flight_gamma_deg if session.phase != "prelaunch" else inputs.gamma0_deg,
+                config,
+            )
+            draw_phugoid_notes(screen, config, outside=warned)
+            draw_energy_strip(screen, sample)
+        if overlays.scatter is not None:
+            draw_assumption(screen, overlays.scatter)
+        elif inputs.mode == "montecarlo":
+            screen.blit(
+                label_font(14).render("Assumption: illustrative hand-throw scatter", True, DIM),
+                (DOCK_WIDTH + 16, screen.get_height() - 188),
+            )
         if session.phase == "frozen" and session.flight is not None:
             draw_results(screen, session.flight, session.t_sim, session.flight_mode, sample)
         if session.note:

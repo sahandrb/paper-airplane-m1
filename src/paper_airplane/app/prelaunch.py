@@ -15,8 +15,26 @@ from paper_airplane.config import Config
 from paper_airplane.equilibrium import alpha_star_deg, gamma_star_deg, v_star
 from paper_airplane.sprite_geometry import rotate_offset
 
-PreviewMode = Literal["reference", "physical"]
+PreviewMode = Literal["reference", "physical", "phugoid", "montecarlo", "heatmap"]
+MODES: tuple[PreviewMode, ...] = ("reference", "physical", "phugoid", "montecarlo", "heatmap")
+MODE_LABELS: dict[str, str] = {
+    "reference": "Reference",
+    "physical": "Physical",
+    "phugoid": "Phugoid",
+    "montecarlo": "Monte Carlo",
+    "heatmap": "Heatmap",
+}
 DOCK_WIDTH = 300
+LINEAR_LIMIT = "Linear model is outside its small-perturbation region."
+N_MIN = 10
+N_MAX = 200
+N_STEP = 10
+SIGMA_V_MIN = 0.0
+SIGMA_V_MAX = 1.0
+SIGMA_V_STEP = 0.05
+SIGMA_G_MIN = 0.0
+SIGMA_G_MAX = 15.0
+SIGMA_G_STEP = 0.5
 
 BUCKLE_WARNING = (
     "Stengel notes that a real paper wing may buckle above ~5 m/s. "
@@ -33,6 +51,9 @@ class LaunchInputs:
     v0_m_s: float
     gamma0_deg: float
     mode: PreviewMode = "reference"
+    n_throws: int = 50
+    sigma_v_m_s: float = 0.20
+    sigma_gamma_deg: float = 3.0
 
 
 def default_inputs(config: Config) -> LaunchInputs:
@@ -85,8 +106,38 @@ def slider_value(fraction: float, low: float, high: float, step: float) -> float
 
 
 def toggle_mode(inputs: LaunchInputs) -> LaunchInputs:
-    mode: PreviewMode = "physical" if inputs.mode == "reference" else "reference"
-    return replace(inputs, mode=mode)
+    """Advance Reference, Physical, Phugoid, Monte Carlo, Heatmap, then back."""
+    index = MODES.index(inputs.mode) if inputs.mode in MODES else 0
+    return replace(inputs, mode=MODES[(index + 1) % len(MODES)])
+
+
+def solver_mode(mode: str) -> PreviewMode:
+    """Reference timing for phugoid. Physical timing for a Monte Carlo nominal throw."""
+    if mode in ("physical", "montecarlo"):
+        return "physical"
+    return "reference"
+
+
+def linear_model_outside(v0_m_s: float, gamma0_deg: float, config: Config) -> bool:
+    """True when the launch is too far from (V*, gamma*) for the linear phugoid."""
+    speed = v_star(config)
+    if speed > 0.0 and abs(v0_m_s - speed) / speed > 0.3:
+        return True
+    return abs(gamma0_deg - gamma_star_deg(config)) > 15.0
+
+
+def step_scatter(
+    inputs: LaunchInputs,
+    *,
+    n_steps: int = 0,
+    v_steps: int = 0,
+    g_steps: int = 0,
+) -> LaunchInputs:
+    """Move the Monte Carlo steppers and keep them inside their ranges."""
+    count = int(_clamp(inputs.n_throws + n_steps * N_STEP, N_MIN, N_MAX))
+    sigma_v = _clamp(inputs.sigma_v_m_s + v_steps * SIGMA_V_STEP, SIGMA_V_MIN, SIGMA_V_MAX)
+    sigma_g = _clamp(inputs.sigma_gamma_deg + g_steps * SIGMA_G_STEP, SIGMA_G_MIN, SIGMA_G_MAX)
+    return replace(inputs, n_throws=count, sigma_v_m_s=sigma_v, sigma_gamma_deg=sigma_g)
 
 
 def theta0_deg(inputs: LaunchInputs, config: Config) -> float:

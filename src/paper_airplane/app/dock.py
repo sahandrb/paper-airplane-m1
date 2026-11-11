@@ -8,6 +8,16 @@ import pygame
 
 from paper_airplane.app.prelaunch import (
     DOCK_WIDTH,
+    MODE_LABELS,
+    N_MAX,
+    N_MIN,
+    N_STEP,
+    SIGMA_G_MAX,
+    SIGMA_G_MIN,
+    SIGMA_G_STEP,
+    SIGMA_V_MAX,
+    SIGMA_V_MIN,
+    SIGMA_V_STEP,
     LaunchInputs,
     buckle_warning,
     readout_lines,
@@ -27,8 +37,7 @@ class HitBox:
 def dock_hits() -> tuple[HitBox, ...]:
     """Click targets. Slider boxes are taller than the drawn track."""
     return (
-        HitBox("mode-reference", pygame.Rect(16, 48, 128, 26)),
-        HitBox("mode-physical", pygame.Rect(152, 48, 128, 26)),
+        HitBox("mode", pygame.Rect(16, 48, DOCK_WIDTH - 32, 26)),
         HitBox("preset-a", pygame.Rect(16, 82, 64, 26)),
         HitBox("preset-b", pygame.Rect(84, 82, 64, 26)),
         HitBox("preset-c", pygame.Rect(152, 82, 64, 26)),
@@ -41,19 +50,44 @@ def dock_hits() -> tuple[HitBox, ...]:
     )
 
 
-def hit_test(pos: tuple[int, int]) -> str | None:
-    for box in dock_hits():
+def scatter_hits(height: int = 720) -> tuple[HitBox, ...]:
+    """Monte Carlo steppers. They sit in the bottom of the dock."""
+    y = height - 196
+    return (
+        HitBox("scatter-n", pygame.Rect(16, y, DOCK_WIDTH - 32, 20)),
+        HitBox("scatter-sv", pygame.Rect(16, y + 24, DOCK_WIDTH - 32, 20)),
+        HitBox("scatter-sg", pygame.Rect(16, y + 48, DOCK_WIDTH - 32, 20)),
+    )
+
+
+def recompute_hit(height: int = 720) -> HitBox:
+    return HitBox("recompute", pygame.Rect(16, height - 196, 150, 24))
+
+
+def hit_test(pos: tuple[int, int], *, mode: str = "reference", height: int = 720) -> str | None:
+    boxes: tuple[HitBox, ...] = dock_hits()
+    if mode == "montecarlo":
+        boxes = boxes + scatter_hits(height)
+    elif mode == "heatmap":
+        boxes = boxes + (recompute_hit(height),)
+    for box in boxes:
         if box.rect.collidepoint(pos):
             return box.name
     return None
 
 
-def value_from_pointer(name: str, x: int, config: Config) -> float:
+def value_from_pointer(name: str, x: int, config: Config, height: int = 720) -> float:
     """Slider value for a pointer x, snapped to that slider's step."""
-    track = _track(name)
+    track = _track(name, height)
     fraction = 0.0 if track.width == 0 else (x - track.x) / track.width
     if name == "slider-v0":
         return slider_value(fraction, config.v0_min_m_s, config.v0_max_m_s, config.v0_step_m_s)
+    if name == "scatter-n":
+        return slider_value(fraction, N_MIN, N_MAX, N_STEP)
+    if name == "scatter-sv":
+        return slider_value(fraction, SIGMA_V_MIN, SIGMA_V_MAX, SIGMA_V_STEP)
+    if name == "scatter-sg":
+        return slider_value(fraction, SIGMA_G_MIN, SIGMA_G_MAX, SIGMA_G_STEP)
     return slider_value(fraction, config.gamma0_min_deg, config.gamma0_max_deg, config.gamma0_step_deg)
 
 
@@ -77,7 +111,7 @@ def draw_dock(
     """Buttons, sliders, and readouts. Call this after the airplane so the numbers stay visible."""
     _draw_modes(screen, inputs)
     _draw_presets(screen)
-    _draw_slider(screen, "slider-v0", "V0", inputs.v0_m_s, config.v0_min_m_s, config.v0_max_m_s)
+    _draw_slider(screen, "slider-v0", "V0", inputs.v0_m_s, config.v0_min_m_s, config.v0_max_m_s, screen.get_height())
     _draw_slider(
         screen,
         "slider-gamma",
@@ -85,10 +119,13 @@ def draw_dock(
         inputs.gamma0_deg,
         config.gamma0_min_deg,
         config.gamma0_max_deg,
+        screen.get_height(),
     )
     _button(screen, _track("launch"), "Launch", False, ACCENT)
     _button(screen, _track("reset"), "RESET", False, ACCENT)
     _button(screen, _track("restart"), "RESTART", False, ACCENT)
+    if inputs.mode in ("montecarlo", "heatmap"):
+        show_readouts = False
     hint_font = label_font(13)
     hint_lines = _wrap(DOCK_HINT, hint_font, DOCK_WIDTH - 32)
     readout_font = number_font(15)
@@ -115,6 +152,10 @@ def draw_dock(
         surf = readout_font.render(line, True, TEXT)
         screen.blit(surf, (16, y))
         y += surf.get_height() + 2
+    if inputs.mode == "montecarlo":
+        _draw_scatter_controls(screen, inputs)
+    elif inputs.mode == "heatmap":
+        _button(screen, recompute_hit(screen.get_height()).rect, "Recompute", False, ACCENT)
 
 
 def draw_buckle_banner(screen: pygame.Surface, inputs: LaunchInputs) -> None:
@@ -143,21 +184,27 @@ def _backing(screen: pygame.Surface, rect: pygame.Rect) -> None:
     screen.blit(plate, rect.topleft)
 
 
-def _track(name: str) -> pygame.Rect:
-    for box in dock_hits():
+def _track(name: str, height: int = 720) -> pygame.Rect:
+    for box in (*dock_hits(), *scatter_hits(height), recompute_hit(height)):
         if box.name == name:
             return box.rect
     raise KeyError(name)
 
 
 def _draw_modes(screen: pygame.Surface, inputs: LaunchInputs) -> None:
-    _button(screen, dock_hits()[0].rect, "Reference", inputs.mode == "reference", OK)
-    _button(screen, dock_hits()[1].rect, "Physical", inputs.mode == "physical", OK)
+    _button(screen, dock_hits()[0].rect, MODE_LABELS.get(inputs.mode, inputs.mode), True, OK)
 
 
 def _draw_presets(screen: pygame.Surface) -> None:
-    for box, label in zip(dock_hits()[2:6], ("A", "B", "C", "D")):
+    for box, label in zip(dock_hits()[1:5], ("A", "B", "C", "D")):
         _button(screen, box.rect, label, False, ACCENT)
+
+
+def _draw_scatter_controls(screen: pygame.Surface, inputs: LaunchInputs) -> None:
+    height = screen.get_height()
+    _draw_slider(screen, "scatter-n", "N", inputs.n_throws, N_MIN, N_MAX, height)
+    _draw_slider(screen, "scatter-sv", "sigma V", inputs.sigma_v_m_s, SIGMA_V_MIN, SIGMA_V_MAX, height)
+    _draw_slider(screen, "scatter-sg", "sigma gamma", inputs.sigma_gamma_deg, SIGMA_G_MIN, SIGMA_G_MAX, height)
 
 
 def _draw_slider(
@@ -167,8 +214,9 @@ def _draw_slider(
     value: float,
     low: float,
     high: float,
+    height: int = 720,
 ) -> None:
-    track = _track(name)
+    track = _track(name, height)
     label = label_font(14).render(caption, True, DIM)
     screen.blit(label, (track.x, track.y - 16))
     line_y = track.centery

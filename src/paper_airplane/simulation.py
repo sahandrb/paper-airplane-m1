@@ -7,6 +7,7 @@ Monte Carlo speed and angle sigmas are an assumption, not Stengel data.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
 
@@ -307,6 +308,8 @@ def monte_carlo(
     sigma_gamma_deg: float | None = None,
     rng: np.random.Generator | None = None,
     config: Config | None = None,
+    progress: Callable[[int, int], None] | None = None,
+    n_samples: int = 2,
 ) -> MonteCarloResult:
     """Physical throws with independent normal scatter.
 
@@ -319,18 +322,23 @@ def monte_carlo(
     generator = np.random.default_rng() if rng is None else rng
     speeds = generator.normal(airspeed0, speed_sigma, count)
     angles = generator.normal(gamma0, np.deg2rad(angle_sigma_deg), count)
-    flights = tuple(
-        integrate_physical(
-            float(speed),
-            float(angle),
-            config=cfg,
-            rtol=cfg.survey_rtol,
-            atol=cfg.survey_atol,
-            max_step=cfg.survey_max_step_s,
-            n_samples=2,
+    flights_list: list[Trajectory] = []
+    pairs = list(zip(speeds, angles, strict=True))
+    for index, (speed, angle) in enumerate(pairs):
+        flights_list.append(
+            integrate_physical(
+                float(speed),
+                float(angle),
+                config=cfg,
+                rtol=cfg.survey_rtol,
+                atol=cfg.survey_atol,
+                max_step=cfg.survey_max_step_s,
+                n_samples=n_samples,
+            )
         )
-        for speed, angle in zip(speeds, angles, strict=True)
-    )
+        if progress is not None:
+            progress(index + 1, len(pairs))
+    flights = tuple(flights_list)
     landed = np.array(
         [flight.r[-1] for flight in flights if flight.terminated_by == "ground"],
         dtype=np.float64,
@@ -355,13 +363,18 @@ def math_nan() -> float:
     return float("nan")
 
 
-def range_heatmap(config: Config | None = None) -> HeatmapResult:
+def range_heatmap(
+    config: Config | None = None,
+    progress: Callable[[int, int], None] | None = None,
+) -> HeatmapResult:
     """Physical landing range over the slider rectangle. The peak is computed."""
     cfg = _cfg(config)
     speeds = np.linspace(cfg.v0_min_m_s, cfg.v0_max_m_s, cfg.heatmap_n_v)
     angles = np.deg2rad(np.linspace(cfg.gamma0_min_deg, cfg.gamma0_max_deg, cfg.heatmap_n_g))
     ranges = np.empty((angles.size, speeds.size), dtype=np.float64)
     for i, angle in enumerate(angles):
+        if progress is not None:
+            progress(i, int(angles.size))
         for j, speed in enumerate(speeds):
             flight = integrate_physical(
                 float(speed),
@@ -376,4 +389,6 @@ def range_heatmap(config: Config | None = None) -> HeatmapResult:
                 ranges[i, j] = flight.r[-1]
             else:
                 ranges[i, j] = np.nan
+    if progress is not None:
+        progress(int(angles.size), int(angles.size))
     return HeatmapResult(v0_m_s=speeds, gamma0_rad=angles, range_m=ranges)

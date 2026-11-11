@@ -5,7 +5,7 @@ type: software
 authors:
   - family-names: Ranjbaripour
     given-names: Sahand
-repository-code: https://github.com/sahandrb/paper-airplane-flight-lab
+repository-code: https://github.com/sahandrb/paper-airplane-m1
 license: MIT
 version: 0.1.0
 date-released: 2026-11-11

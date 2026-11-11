@@ -4,7 +4,7 @@ Developed by Sahand Ranjbaripour, Flight Dynamics course project under Prof. Ami
 
 A 2D, side-view engineering lab for the point-mass paper airplane in Robert F. Stengel, *Flight Dynamics* (2005), Example 1.3-1. It reproduces the professor's four cases and is meant to show equilibrium glide, the phugoid, and why a fast throw loops. It is not a game: there is no score, crash, or sound.
 
-This repository commit is the project skeleton. The flight window, solver, and plots are later milestones. `python -m paper_airplane` confirms that the package is installed.
+![Flight lab window](docs/images/flight_lab.png)
 
 ![Dusk field, launcher, and paper dart](docs/images/scene_preview.jpg)
 
@@ -45,7 +45,7 @@ python -m paper_airplane
 
 `python main.py` does the same thing.
 
-Headless exports specified for later milestones:
+Headless figures, without opening the window:
 
 ```bash
 python -m paper_airplane --reference-plots
@@ -56,9 +56,7 @@ Generated plots and CSV files go under `outputs/` (gitignored).
 
 ## Controls
 
-These bindings are the specified window controls. The skeleton entry point does not open a window.
-
-Before launch, sliders and the mouse set \(V_0\) and \(\gamma_0\).
+Before launch, sliders and the mouse set \(V_0\) and \(\gamma_0\). Tab cycles Reference, Physical, Phugoid, Monte Carlo, and Heatmap.
 
 | Key | Action |
 | --- | --- |
@@ -80,7 +78,7 @@ After a run, Space launches again from the current sliders and keeps existing tr
 
 ## Outputs
 
-Show plots opens the Matplotlib figures. Export writes PNG and CSV files into `outputs/run_YYYYMMDD_HHMMSS/`.
+Show plots opens the Matplotlib figures. Export writes PNG and CSV files into `outputs/run_YYYYMMDD_HHMMSS/`. The model notes are in [docs/theory.md](docs/theory.md) and the checks are in [docs/validation.md](docs/validation.md).
 
 ## Assumptions and limitations
 

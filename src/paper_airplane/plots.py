@@ -13,7 +13,9 @@ import numpy as np
 
 from paper_airplane.config import DEFAULT_CONFIG, Config
 from paper_airplane.equilibrium import gamma_star_rad, v_star
-from paper_airplane.simulation import HeatmapResult, Trajectory, cases_abcd, range_heatmap
+from paper_airplane.analysis import phugoid_metrics
+from paper_airplane.linearize import HybridPath
+from paper_airplane.simulation import HeatmapResult, MonteCarloResult, Trajectory, cases_abcd, range_heatmap
 
 CASE_ORDER = ("a", "b", "c", "d")
 CASE_COLORS = ("#0072BD", "#D95319", "#EDB120", "#7E2F8E")
@@ -186,6 +188,66 @@ def write_run_path(
     axis.grid(True)
     _footnote(figure)
     figure.savefig(folder / "last_run_path.png")
+    plt.close(figure)
+    return folder
+
+
+def write_energy(trajectory: Trajectory, directory: Path | None = None) -> Path:
+    """KE, PE, and total against time. Total falls because of drag."""
+    _ensure_headless()
+    plt = _pyplot()
+    folder = _run_folder(directory)
+    figure, axis = plt.subplots(figsize=(7.0, 4.5))
+    axis.plot(trajectory.t, trajectory.ke, label="KE", color="#E2B04E")
+    axis.plot(trajectory.t, trajectory.pe, label="PE", color="#4C9BE8")
+    axis.plot(trajectory.t, trajectory.energy, label="E", color="#E8EDF5")
+    axis.set_xlabel("Time, s")
+    axis.set_ylabel("Energy, J")
+    axis.legend()
+    axis.grid(True)
+    _footnote(figure)
+    figure.savefig(folder / "energy.png")
+    plt.close(figure)
+    return folder
+
+
+def write_phugoid_compare(
+    nonlinear: Trajectory,
+    linear: HybridPath,
+    directory: Path | None = None,
+    config: Config | None = None,
+) -> Path:
+    """Nonlinear path and the hybrid linear path, with lambda, T, and zeta."""
+    _ensure_headless()
+    plt = _pyplot()
+    folder = _run_folder(directory)
+    figure, axis = plt.subplots(figsize=(7.0, 4.5))
+    axis.plot(nonlinear.r, nonlinear.h, color=CASE_COLORS[0], linewidth=1.6, label="nonlinear")
+    axis.plot(linear.r, linear.h, color=CASE_COLORS[2], linewidth=1.4, linestyle="--", label="linear")
+    axis.set_xlabel("Range, m")
+    axis.set_ylabel("Height, m")
+    axis.set_title(phugoid_metrics(config))
+    axis.legend()
+    axis.grid(True)
+    _footnote(figure)
+    figure.savefig(folder / "phugoid.png")
+    plt.close(figure)
+    return folder
+
+
+def write_monte_histogram(result: MonteCarloResult, directory: Path | None = None) -> Path:
+    """Landing-range histogram. The assumption stays off the footnote."""
+    _ensure_headless()
+    plt = _pyplot()
+    folder = _run_folder(directory)
+    figure, axis = plt.subplots(figsize=(7.0, 4.5))
+    if result.landing_range_m.size:
+        axis.hist(result.landing_range_m, bins=min(20, max(5, result.landing_range_m.size)), color=CASE_COLORS[0])
+    axis.set_xlabel("Landing range, m")
+    axis.set_ylabel("Count")
+    axis.grid(True)
+    _footnote(figure)
+    figure.savefig(folder / "monte_carlo_hist.png")
     plt.close(figure)
     return folder
 
