@@ -50,4 +50,4 @@ Stengel's rounded figures are \(\alpha \approx 9.3^\circ\), \(L/D \approx 5.2\),
 
 Reference integration runs to \(t = 6\,\mathrm{s}\) with no ground event, so altitude may be negative. Physical flight stops at the downward crossing of \(h = 0\).
 
-The coefficients are constant. There is no stall model. A real paper wing at low Reynolds number is not this idealisation, and Stengel's note that a paper wing may buckle above about \(5\,\mathrm{m/s}\) is a warning only. Case d remains a numerical demonstration. Monte Carlo speed and angle scatter is an assumption for a hand throw. It is not Stengel data.
+The coefficients are constant. There is no stall model. A real paper wing at low Reynolds number is not this idealisation, and Stengel's note that a paper wing may buckle above about \(5\,\mathrm{m/s}\) is a warning only. Case d remains a numerical demonstration. Monte Carlo speed and angle scatter is an assumption for a hand throw. It is not Stengel data. The airflow loudness follows the shape of dynamic pressure: the high-loop mix and the extra volume are both set by \((V / 3V*)^2\).

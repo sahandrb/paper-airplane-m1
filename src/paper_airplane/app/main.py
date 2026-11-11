@@ -11,6 +11,7 @@ from dataclasses import replace
 import pygame
 
 from paper_airplane.app.about import ABOUT_LINES, CAPTION, CREDIT, FOOTER, HINT
+from paper_airplane.app.audio import FlightAudio
 from paper_airplane.app.actors import draw_pose, draw_preview_path, load_flight_art
 from paper_airplane.app.background import draw_world, load_scenery, project_root
 from paper_airplane.app.camera import follow_camera, prelaunch_camera
@@ -127,6 +128,8 @@ def _loop(config: Config, *, frame_limit: int | None, splash_s: float) -> int:
     session = Session()
     overlays = Overlays()
     heatmap_cache = HeatmapCache()
+    audio = FlightAudio()
+    audio.start()
     dragging: str | None = None
     clock = pygame.time.Clock()
     showing_splash = splash_s > 0.0
@@ -161,6 +164,7 @@ def _loop(config: Config, *, frame_limit: int | None, splash_s: float) -> int:
                     overlays,
                     heatmap_cache,
                     screen,
+                    audio,
                 )
                 if finished:
                     return 0
@@ -173,6 +177,9 @@ def _loop(config: Config, *, frame_limit: int | None, splash_s: float) -> int:
                 if event.key == pygame.K_m and not about_open and not quit_prompt:
                     show_minimap = not show_minimap
                     continue
+                if event.key == pygame.K_n and not about_open and not quit_prompt:
+                    audio.toggle_mute()
+                    continue
                 inputs, session, about_open, quit_prompt, finished = _on_flight_key(
                     event.key,
                     inputs,
@@ -183,6 +190,7 @@ def _loop(config: Config, *, frame_limit: int | None, splash_s: float) -> int:
                     overlays,
                     heatmap_cache,
                     screen,
+                    audio,
                 )
                 if finished:
                     return 0
@@ -196,6 +204,10 @@ def _loop(config: Config, *, frame_limit: int | None, splash_s: float) -> int:
         if session.phase != "playing":
             preview_path, cache_key = _refresh_preview(preview_path, cache_key, inputs, config)
         session = _advance(session, dt, overlays)
+        airspeed = 0.0
+        if session.phase == "playing" and session.flight is not None:
+            airspeed = float(sample_at(session.flight, session.t_sim).v)
+        audio.update(session.phase, airspeed, v_star(config), dt)
         if session.phase == "prelaunch":
             camera = prelaunch_camera(config)
         elif session.flight is not None:
@@ -216,6 +228,7 @@ def _loop(config: Config, *, frame_limit: int | None, splash_s: float) -> int:
             overlays=overlays,
             heatmap=heatmap_cache.grid,
             show_minimap=show_minimap,
+            sound_muted=audio.muted,
         )
         pygame.display.flip()
         frames += 1
@@ -329,6 +342,7 @@ def _launch(
     config: Config,
     overlays: Overlays,
     screen: pygame.Surface | None = None,
+    audio: FlightAudio | None = None,
 ) -> Session:
     if inputs.mode == "heatmap":
         return session
@@ -371,6 +385,8 @@ def _launch(
     session.flight_gamma_deg = inputs.gamma0_deg
     session.flight_mode = inputs.mode
     session.note = ""
+    if audio is not None:
+        audio.play_whoosh()
     return session
 
 
@@ -482,6 +498,7 @@ def _on_click(
     overlays: Overlays,
     heatmap_cache: HeatmapCache,
     screen: pygame.Surface,
+    audio: FlightAudio,
 ) -> tuple[LaunchInputs, Session, str | None, bool]:
     if session.phase == "frozen":
         for name, rect in result_hits(width, height):
@@ -492,7 +509,7 @@ def _on_click(
         heatmap_cache.force = True
         return inputs, session, None, False
     if name == "launch" and session.phase != "playing":
-        return inputs, _launch(session, inputs, config, overlays, screen), None, False
+        return inputs, _launch(session, inputs, config, overlays, screen, audio), None, False
     if name == "reset":
         overlays.clear()
         return inputs, cleared(session), None, False
@@ -539,6 +556,7 @@ def _on_flight_key(
     overlays: Overlays,
     heatmap_cache: HeatmapCache,
     screen: pygame.Surface,
+    audio: FlightAudio,
 ) -> tuple[LaunchInputs, Session, bool, bool, bool]:
     if key == pygame.K_ESCAPE and session.phase == "playing" and not about_open and not quit_prompt:
         return inputs, _abort(session), about_open, quit_prompt, False
@@ -558,7 +576,7 @@ def _on_flight_key(
         _export(session, inputs, overlays, heatmap_cache.grid)
         return inputs, session, about_open, quit_prompt, False
     if key in (pygame.K_SPACE, pygame.K_RETURN, pygame.K_KP_ENTER) and session.phase != "playing":
-        return inputs, _launch(session, inputs, config, overlays, screen), about_open, quit_prompt, False
+        return inputs, _launch(session, inputs, config, overlays, screen, audio), about_open, quit_prompt, False
     if key == pygame.K_r:
         overlays.clear()
         return inputs, cleared(session), about_open, quit_prompt, False
@@ -588,6 +606,7 @@ def _draw_frame(
     overlays: Overlays,
     heatmap: HeatmapResult | None,
     show_minimap: bool = False,
+    sound_muted: bool = False,
 ) -> None:
     heatmap_on = inputs.mode == "heatmap" and heatmap is not None and not showing_splash
     if heatmap_on:
@@ -645,6 +664,7 @@ def _draw_frame(
             speed=session.speed,
             show_readouts=session.phase == "prelaunch",
             show_reference=shows_reference_ground(inputs.mode, session.book),
+            sound_muted=sound_muted,
         )
         draw_legend(screen, session.book, config)
         draw_buckle_banner(screen, inputs)
