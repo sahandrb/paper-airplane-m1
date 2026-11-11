@@ -2,7 +2,7 @@
 
 Developed by Sahand Ranjbaripour, Flight Dynamics course project under Prof. Amiri Atashgah, University of Tehran
 
-A 2D, side-view engineering lab for the point-mass paper airplane in Robert F. Stengel, *Flight Dynamics* (2005), Example 1.3-1. It reproduces the professor's four cases and is meant to show equilibrium glide, the phugoid, and why a fast throw loops. It is not a game: there is no score, crash, or sound.
+A 2D, side-view engineering lab for the point-mass paper airplane in Robert F. Stengel, *Flight Dynamics* (2005), Example 1.3-1. It reproduces the professor's four cases and is meant to show equilibrium glide, the phugoid, and why a fast throw loops. It is not a game: there is no score or crash. Airflow loudness follows true airspeed.
 
 ![Flight lab window](docs/images/flight_lab.png)
 

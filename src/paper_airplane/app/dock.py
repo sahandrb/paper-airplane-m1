@@ -125,7 +125,7 @@ def draw_dock(
     _draw_presets(screen, config.ground_screen_y0)
     _draw_modes(screen, inputs, config.ground_screen_y0)
     screen.blit(number_font(14).render(f"{speed:g}×", True, TEXT), (420, top + 12))
-    sound_label = "N muted" if sound_muted else "N ♪"
+    sound_label = "N muted" if sound_muted else "N sound"
     screen.blit(label_font(13).render(sound_label, True, DIM), (808, top + 14))
     _button(screen, _track("launch", config.ground_screen_y0), "LAUNCH", False, ACCENT)
     _button(screen, _track("reset", config.ground_screen_y0), "RESET", False, ACCENT)
