@@ -100,6 +100,6 @@ def test_heatmap_command_writes_a_png(tmp_path: Path, monkeypatch: pytest.Monkey
     assert (folders[0] / "heatmap.png").stat().st_size > 1000
 
 
-def test_no_flags_does_not_open_a_window(capsys: pytest.CaptureFixture[str]) -> None:
+def test_no_flags_opens_the_window(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("paper_airplane.app.main.run_app", lambda: 0)
     assert main([]) == 0
-    assert "later milestone" in capsys.readouterr().out

@@ -19,11 +19,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
     if not args.reference_plots and not args.heatmap:
-        print(
-            "Paper Airplane Flight Lab skeleton is installed. "
-            "The flight window is added in a later milestone."
-        )
-        return 0
+        from paper_airplane.app.main import run_app
+
+        return run_app()
 
     import matplotlib
 
