@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pygame
 
-from paper_airplane.app.camera import Camera, ground_scroll_px, unsplit_launcher_dest, visible_metre_marks
+from paper_airplane.app.camera import Camera, ground_scroll_px, visible_metre_marks
 from paper_airplane.app.theme import GROUND_FALLBACK, SKY_HORIZON, SKY_TOP, TICK, number_font
 from paper_airplane.config import Config
 
@@ -56,7 +56,7 @@ def load_scenery(root: Path | None = None) -> Scenery:
     if catapult.is_file():
         launcher = pygame.image.load(str(catapult)).convert_alpha()
     else:
-        message = "catapult.png is missing; the pre-launch frame has no launcher."
+        message = "catapult.png is missing; drawing a plain pedestal and ramp."
         log.warning(message)
         warnings.append(message)
     return Scenery(sky=sky, ground=ground, launcher=launcher, warnings=tuple(warnings))
@@ -68,7 +68,7 @@ def draw_world(
     config: Config,
     scenery: Scenery,
 ) -> None:
-    """Paint sky, the h < 0 band, metre ticks, and the unsplit catapult."""
+    """Paint the fixed sky, the scrolling ground, and the metre ticks."""
     ground_y = int(round(camera.cam_y))
     if scenery.sky is not None:
         screen.fill(SKY_HORIZON)
@@ -86,7 +86,6 @@ def draw_world(
                 (0, max(ground_y, 0), screen.get_width(), height - max(ground_y, 0)),
             )
     _draw_ticks(screen, camera, config, ground_y)
-    _draw_launcher(screen, camera, config, scenery.launcher)
 
 
 def _draw_fallback_sky(screen: pygame.Surface, ground_y: int) -> None:
@@ -145,26 +144,3 @@ def _draw_ticks(screen: pygame.Surface, camera: Camera, config: Config, ground_y
         overlay.blit(label, (sx - label.get_width() // 2, ground_y - tick_h - label.get_height() - 2))
     screen.blit(overlay, (0, 0))
 
-
-def _draw_launcher(
-    screen: pygame.Surface,
-    camera: Camera,
-    config: Config,
-    launcher: pygame.Surface | None,
-) -> None:
-    """Blit the whole catapult. The split ramp arrives with the pre-launch pose.
-
-    The left edge stays on world ``r = 0`` and the base stays on ``h = 0``,
-    so a later camera move carries the launcher with the field.
-    """
-    if launcher is None:
-        return
-    drawn_w, drawn_h = unsplit_launcher_dest(
-        config,
-        (launcher.get_width(), launcher.get_height()),
-    )[2:]
-    size = (max(1, int(round(drawn_w))), max(1, int(round(drawn_h))))
-    screen.blit(
-        pygame.transform.smoothscale(launcher, size),
-        (int(round(camera.cam_x)), int(round(camera.cam_y - drawn_h))),
-    )

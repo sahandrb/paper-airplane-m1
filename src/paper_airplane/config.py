@@ -73,6 +73,9 @@ class Config:
     cg_px: tuple[float, float] = (388.0, 119.0)
     launcher_rest_gamma_deg: float = 16.1
     launcher_pivot_px: tuple[float, float] = (199.0, 124.0)
+    # Crops on the 330x279 catapult: pillar (x, y, w, h), then ramp and band.
+    launcher_pillar_crop: tuple[int, int, int, int] = (130, 124, 140, 155)
+    launcher_ramp_crop: tuple[int, int, int, int] = (0, 0, 330, 128)
 
     trajectory_samples: int = 2401
 
