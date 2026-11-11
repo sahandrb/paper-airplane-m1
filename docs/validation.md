@@ -44,8 +44,9 @@ The landing-range grid is 31 angles by 41 speeds. Its peak is computed. It lands
 - Trails persist. RESTART keeps them. RESET clears them and leaves the sliders.
 - Reference samples below \(h = 0\) are dashed, with the below-ground caption.
 - Before launch the launcher is near 8 percent of the width and the ground is near 76 percent of the height (\(548/720\)).
-- The dart is about 110 pixels long. Zoom stays at \(83.5\,\mathrm{px/m}\).
-- The scale bar and the "not to scale" label are visible.
+- The world fills the window. Controls sit in one bar on the dark ground, and the numbers sit in a small card at the top-right.
+- The dart is about 110 pixels long, with its CG on the launch point. The launcher is about 170 pixels tall and stands on the ground. Zoom stays at \(83.5\,\mathrm{px/m}\).
+- A 1 m scale bar and the "not to scale" label sit in the ground bar. The airplane picture does not cross the horizon.
 - The footer is visible. A opens About.
 - A missing art file still runs, using the drawn fallback.
 - Phugoid shows the dashed linear path, \(\lambda\), \(T\), \(\zeta\), and the energy strip. Preset D shows the small-perturbation sentence. Preset A does not.

@@ -14,14 +14,12 @@ from paper_airplane.app.about import ABOUT_LINES, CAPTION, CREDIT, FOOTER, HINT
 from paper_airplane.app.actors import draw_pose, draw_preview_path, load_flight_art
 from paper_airplane.app.background import draw_world, load_scenery, project_root
 from paper_airplane.app.camera import follow_camera, prelaunch_camera
-from paper_airplane.app.dock import draw_buckle_banner, draw_dock, draw_dock_panel, hit_test, value_from_pointer
+from paper_airplane.app.dock import draw_buckle_banner, draw_dock, hit_test, value_from_pointer
 from paper_airplane.app.hud import (
     draw_assumption,
-    draw_energy_strip,
     draw_heatmap_view,
     draw_hybrid,
     draw_legend,
-    draw_phugoid_notes,
     draw_progress,
     draw_reference_ground,
     draw_results,
@@ -32,7 +30,6 @@ from paper_airplane.app.hud import (
     result_hits,
 )
 from paper_airplane.app.prelaunch import (
-    DOCK_WIDTH,
     LaunchInputs,
     apply_preset,
     default_inputs,
@@ -75,6 +72,7 @@ from paper_airplane.trails import (
     paint_active,
     returned,
     scroll_legend,
+    shows_reference_ground,
 )
 
 _TARGET_FPS = 60
@@ -135,6 +133,7 @@ def _loop(config: Config, *, frame_limit: int | None, splash_s: float) -> int:
     splash_deadline = time.perf_counter() + splash_s
     about_open = False
     quit_prompt = False
+    show_minimap = False
     frames = 0
 
     while True:
@@ -171,6 +170,9 @@ def _loop(config: Config, *, frame_limit: int | None, splash_s: float) -> int:
             elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
                 dragging = None
             elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_m and not about_open and not quit_prompt:
+                    show_minimap = not show_minimap
+                    continue
                 inputs, session, about_open, quit_prompt, finished = _on_flight_key(
                     event.key,
                     inputs,
@@ -213,6 +215,7 @@ def _loop(config: Config, *, frame_limit: int | None, splash_s: float) -> int:
             quit_prompt=quit_prompt,
             overlays=overlays,
             heatmap=heatmap_cache.grid,
+            show_minimap=show_minimap,
         )
         pygame.display.flip()
         frames += 1
@@ -584,6 +587,7 @@ def _draw_frame(
     quit_prompt: bool,
     overlays: Overlays,
     heatmap: HeatmapResult | None,
+    show_minimap: bool = False,
 ) -> None:
     heatmap_on = inputs.mode == "heatmap" and heatmap is not None and not showing_splash
     if heatmap_on:
@@ -599,8 +603,6 @@ def _draw_frame(
         draw_trails(screen, camera, config, session.book)
         if overlays.hybrid is not None:
             draw_hybrid(screen, camera, config, overlays.hybrid)
-    if not showing_splash:
-        draw_dock_panel(screen)
     ramp_inputs = inputs
     dart_world = None
     dart_theta = None
@@ -614,6 +616,9 @@ def _draw_frame(
         played = sample_at(session.flight, session.t_sim)
         dart_world = (played.r, played.h)
         dart_theta = math.degrees(played.theta)
+        seat_gamma = math.degrees(played.gamma)
+    else:
+        seat_gamma = inputs.gamma0_deg
     if not heatmap_on:
         draw_pose(
             screen,
@@ -623,6 +628,7 @@ def _draw_frame(
             ramp_inputs,
             dart_world=dart_world,
             dart_theta_deg=dart_theta,
+            seat_gamma_deg=seat_gamma,
             show_arc=show_arc,
         )
     if showing_splash:
@@ -638,6 +644,7 @@ def _draw_frame(
             flight_time_s=duration,
             speed=session.speed,
             show_readouts=session.phase == "prelaunch",
+            show_reference=shows_reference_ground(inputs.mode, session.book),
         )
         draw_legend(screen, session.book, config)
         draw_buckle_banner(screen, inputs)
@@ -652,27 +659,35 @@ def _draw_frame(
             and session.flight is not None
             and session.t_sim >= float(session.flight.t[-1]) - 1e-6
         )
-        draw_telemetry(screen, camera, config, sample, session.book, landed=bool(landed))
-        if inputs.mode == "phugoid" or session.flight_mode == "phugoid":
-            warned = linear_model_outside(
-                session.flight_v0 if session.phase != "prelaunch" else inputs.v0_m_s,
-                session.flight_gamma_deg if session.phase != "prelaunch" else inputs.gamma0_deg,
-                config,
-            )
-            draw_phugoid_notes(screen, config, outside=warned)
-            draw_energy_strip(screen, sample)
+        phugoid = inputs.mode == "phugoid" or session.flight_mode == "phugoid"
+        warned = phugoid and linear_model_outside(
+            session.flight_v0 if session.phase != "prelaunch" else inputs.v0_m_s,
+            session.flight_gamma_deg if session.phase != "prelaunch" else inputs.gamma0_deg,
+            config,
+        )
+        draw_telemetry(
+            screen,
+            camera,
+            config,
+            sample,
+            session.book,
+            landed=bool(landed),
+            show_minimap=show_minimap,
+            phugoid=phugoid,
+            outside=warned,
+        )
         if overlays.scatter is not None:
             draw_assumption(screen, overlays.scatter)
         elif inputs.mode == "montecarlo":
             screen.blit(
                 label_font(14).render("Assumption: illustrative hand-throw scatter", True, DIM),
-                (DOCK_WIDTH + 16, screen.get_height() - 188),
+                (16, 668),
             )
         if session.phase == "frozen" and session.flight is not None:
             draw_results(screen, session.flight, session.t_sim, session.flight_mode, sample)
         if session.note:
-            note = label_font(15).render(session.note, True, WARNING)
-            screen.blit(note, (DOCK_WIDTH + 16, screen.get_height() - 132))
+            note = label_font(13).render(session.note, True, WARNING)
+            screen.blit(note, (16, 668))
         _draw_header(screen)
         if scenery.warnings or art.warnings:
             _draw_warnings(screen, scenery.warnings + art.warnings)
@@ -699,33 +714,29 @@ def _on_key(key: int, about_open: bool, quit_prompt: bool) -> tuple[bool, bool, 
 
 
 def _draw_header(screen: pygame.Surface) -> None:
-    bar_h = 36
-    bar = pygame.Surface((screen.get_width(), bar_h), pygame.SRCALPHA)
-    bar.fill((*PANEL, 170))
-    screen.blit(bar, (0, 0))
-    font = label_font_fitting(CREDIT, screen.get_width() - DOCK_WIDTH - 32, 16)
+    font = label_font_fitting(CREDIT, screen.get_width() - 250, 13)
     line = font.render(CREDIT, True, TEXT)
-    screen.blit(line, (DOCK_WIDTH + 16, (bar_h - line.get_height()) // 2))
+    screen.blit(line, (12, 6))
 
 
 def _draw_footer(screen: pygame.Surface) -> None:
-    font = label_font(15)
+    font = label_font(12)
     footer = font.render(FOOTER, True, TEXT)
     footer.set_alpha(190)
     screen.blit(
         footer,
-        (screen.get_width() - footer.get_width() - 16, screen.get_height() - footer.get_height() - 10),
+        (screen.get_width() - footer.get_width() - 12, 694),
     )
     hint = font.render(HINT, True, DIM)
-    screen.blit(hint, (DOCK_WIDTH + 16, screen.get_height() - hint.get_height() - 10))
+    screen.blit(hint, (12, 28))
 
 
 def _draw_warnings(screen: pygame.Surface, warnings: tuple[str, ...]) -> None:
-    font = label_font(16)
-    y = 44
+    font = label_font(13)
+    y = 48
     for message in warnings:
         line = font.render(message, True, WARNING)
-        screen.blit(line, (DOCK_WIDTH + 16, y))
+        screen.blit(line, (12, y))
         y += line.get_height() + 4
 
 

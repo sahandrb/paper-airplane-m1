@@ -10,7 +10,7 @@ import pygame
 from paper_airplane.aero import ld_max
 from paper_airplane.app.camera import Camera
 from paper_airplane.analysis import phugoid_metrics
-from paper_airplane.app.prelaunch import DOCK_WIDTH, LINEAR_LIMIT, dash_segments, presets
+from paper_airplane.app.prelaunch import LINEAR_LIMIT, dash_segments, presets
 from paper_airplane.app.theme import (
     DIM,
     PANEL,
@@ -36,7 +36,8 @@ from paper_airplane.trails import (
     visible_legend,
 )
 
-TELEMETRY_WIDTH = 260
+CARD_WIDTH = 230
+CARD_HEIGHT = 200
 MINI_W = 180
 MINI_H = 90
 MINI_R = (-2.5, 23.0)
@@ -48,16 +49,7 @@ def draw_reference_ground(screen: pygame.Surface, camera: Camera, mode: str, boo
     """Hatch and the exact Reference caption when a path may cross below h = 0."""
     if not shows_reference_ground(mode, book):
         return
-    ground_y = int(round(camera.cam_y))
-    _hatch(screen, ground_y)
-    x = DOCK_WIDTH + 16
-    font = label_font_fitting(REFERENCE_NOTE, screen.get_width() - TELEMETRY_WIDTH - x - 24, 15)
-    line = font.render(REFERENCE_NOTE, True, (226, 176, 78))
-    y = min(max(ground_y + 8, 0), screen.get_height() - line.get_height() - 8)
-    plate = pygame.Surface((line.get_width() + 16, line.get_height() + 8), pygame.SRCALPHA)
-    plate.fill((*PANEL, 210))
-    screen.blit(plate, (x, y))
-    screen.blit(line, (x + 8, y + 4))
+    _hatch(screen, int(round(camera.cam_y)))
 
 
 def draw_trails(
@@ -106,10 +98,10 @@ def draw_legend(screen: pygame.Surface, book: TrailBook, config: Config) -> None
     lines = [legend_line(trail) for trail in rows]
     if book.overflow:
         lines.append(OVERFLOW_HINT)
-    width = max(font.size(line)[0] for line in lines) + 28
+    width = min(max(font.size(line)[0] for line in lines) + 28, screen.get_width() - CARD_WIDTH - 40)
     height = len(lines) * 18 + 10
-    x = DOCK_WIDTH + 12
-    y = 108
+    x = 12
+    y = 72
     plate = pygame.Surface((width, height), pygame.SRCALPHA)
     plate.fill((*PANEL, 210))
     screen.blit(plate, (x, y))
@@ -129,38 +121,51 @@ def draw_telemetry(
     book: TrailBook,
     *,
     landed: bool,
+    show_minimap: bool = False,
+    phugoid: bool = False,
+    outside: bool = False,
 ) -> None:
-    """Right-hand numbers from the true state, plus the minimap."""
-    panel = pygame.Surface((TELEMETRY_WIDTH, screen.get_height()), pygame.SRCALPHA)
-    panel.fill((*PANEL, PANEL_ALPHA))
-    origin_x = screen.get_width() - TELEMETRY_WIDTH
-    screen.blit(panel, (origin_x, 0))
+    """A small card in the top-right. The minimap is drawn under it only when asked."""
+    origin_x = screen.get_width() - CARD_WIDTH - 8
+    origin_y = 8
+    panel = pygame.Surface((CARD_WIDTH, CARD_HEIGHT), pygame.SRCALPHA)
+    panel.fill((*PANEL, 190))
+    screen.blit(panel, (origin_x, origin_y))
     speed = v_star(config)
-    font = number_font(15)
-    lines = (
+    font = number_font(12)
+    lines = [
         f"t = {sample.t:.2f} s",
-        f"V = {sample.v:.2f} m/s  ({sample.v / speed:.2f} V*)",
+        f"V = {sample.v:.2f} m/s ({sample.v / speed:.2f} V*)",
         f"gamma = {math.degrees(sample.gamma):.2f} deg",
-        f"theta = {math.degrees(sample.theta):.2f} deg",
-        f"alpha = {alpha_star_deg(config):.2f} deg",
-        f"h = {sample.h:.2f} m",
-        f"r = {sample.r:.2f} m",
-        f"q = {sample.q_dyn:.2f} Pa",
-        f"L/D = {ld_max(config):.2f}",
-        f"KE = {sample.ke:.4f} J",
-        f"PE = {sample.pe:.4f} J",
+        f"h = {sample.h:.2f} m    r = {sample.r:.2f} m",
         f"E = {sample.energy:.4f} J",
-    )
-    y = 48
+    ]
+    if phugoid:
+        lines.extend(phugoid_metrics(config).split("    "))
+        if outside:
+            lines.append(LINEAR_LIMIT)
+    y = origin_y + 8
+    limit = origin_y + CARD_HEIGHT - 14
     for line in lines:
-        screen.blit(font.render(line, True, TEXT), (origin_x + 12, y))
-        y += 18
-    screen.blit(label_font(13).render(POINT_MASS, True, DIM), (origin_x + 12, y + 2))
-    y += 24
-    if landed:
+        if y > limit:
+            break
+        screen.blit(font.render(line, True, TEXT if line != LINEAR_LIMIT else WARNING), (origin_x + 8, y))
+        y += 14
+    if y <= limit:
+        screen.blit(label_font(11).render(POINT_MASS, True, DIM), (origin_x + 8, y))
+        y += 14
+    if landed and y <= limit:
         text = PHYSICAL_HUD.format(range_m=sample.r, flight_time_s=sample.t)
-        y = _blit_fitted(screen, text, origin_x + 12, y, TELEMETRY_WIDTH - 24)
-    _minimap(screen, pygame.Rect(origin_x + 12, y + 8, MINI_W, MINI_H), camera, config, sample, book)
+        _blit_fitted(screen, text, origin_x + 8, y, CARD_WIDTH - 16)
+    if show_minimap:
+        _minimap(
+            screen,
+            pygame.Rect(origin_x, origin_y + CARD_HEIGHT + 8, MINI_W, MINI_H),
+            camera,
+            config,
+            sample,
+            book,
+        )
 
 
 def draw_results(
@@ -180,11 +185,8 @@ def draw_results(
         f"t = {sample.t:.2f} s   {range_text}   "
         f"V {v_min:.2f}..{v_max:.2f} m/s   gamma {g_min:.1f}..{g_max:.1f} deg"
     )
-    y = screen.get_height() - 108
-    plate = pygame.Surface((screen.get_width() - DOCK_WIDTH - TELEMETRY_WIDTH - 16, 52), pygame.SRCALPHA)
-    plate.fill((*PANEL, 220))
-    screen.blit(plate, (DOCK_WIDTH + 8, y))
-    screen.blit(number_font(14).render(summary, True, TEXT), (DOCK_WIDTH + 16, y + 4))
+    y = 688
+    screen.blit(number_font(12).render(summary, True, TEXT), (16, y))
     for name, rect in result_hits(screen.get_width(), screen.get_height()):
         label = {"plots": "Show plots", "export": "Export", "reset": "RESET", "restart": "RESTART"}[name]
         pygame.draw.rect(screen, (36, 44, 58), rect, border_radius=4)
@@ -194,9 +196,10 @@ def draw_results(
 
 
 def result_hits(width: int, height: int) -> tuple[tuple[str, pygame.Rect], ...]:
-    y = height - 80
-    specs = (("plots", "Show plots", 92), ("export", "Export", 72), ("reset", "RESET", 72), ("restart", "RESTART", 84))
-    right = width - TELEMETRY_WIDTH - 16
+    del height
+    y = 564
+    specs = (("plots", "Show plots", 100), ("export", "Export", 80))
+    right = width - 16
     boxes: list[tuple[str, pygame.Rect]] = []
     for name, _label, box_w in reversed(specs):
         right -= box_w
@@ -206,7 +209,7 @@ def result_hits(width: int, height: int) -> tuple[tuple[str, pygame.Rect], ...]:
 
 
 def legend_scroll_hit(pos: tuple[int, int]) -> bool:
-    return pos[0] >= DOCK_WIDTH and pos[1] < 280
+    return pos[0] < 700 and pos[1] < 220
 
 
 def _hatch(screen: pygame.Surface, ground_y: int) -> None:
@@ -303,8 +306,8 @@ def draw_scatter(screen: pygame.Surface, camera: Camera, config: Config, result:
 def draw_energy_strip(screen: pygame.Surface, sample: Sample) -> None:
     """KE, PE, and total for the played sample, on the telemetry panel."""
     font = number_font(14)
-    x = screen.get_width() - TELEMETRY_WIDTH + 12
-    y = 530
+    x = screen.get_width() - CARD_WIDTH - 8
+    y = 8
     for text in (
         f"KE = {sample.ke:.4f} J",
         f"PE = {sample.pe:.4f} J",
@@ -317,14 +320,14 @@ def draw_energy_strip(screen: pygame.Surface, sample: Sample) -> None:
 def draw_phugoid_notes(screen: pygame.Surface, config: Config, *, outside: bool) -> None:
     """Jacobian readout, and the small-perturbation sentence when it applies."""
     font = number_font(14)
-    x = screen.get_width() - TELEMETRY_WIDTH + 12
-    y = 400
+    x = screen.get_width() - CARD_WIDTH - 8
+    y = 8
     for piece in phugoid_metrics(config).split("    "):
         screen.blit(font.render(piece, True, TEXT), (x, y))
         y += 18
     if outside:
         note = label_font(14)
-        for line in _wrap_note(LINEAR_LIMIT, note, TELEMETRY_WIDTH - 24):
+        for line in _wrap_note(LINEAR_LIMIT, note, CARD_WIDTH - 16):
             screen.blit(note.render(line, True, WARNING), (x, y))
             y += 18
 
@@ -351,9 +354,9 @@ def draw_assumption(screen: pygame.Surface, result: MonteCarloResult) -> None:
     font = label_font(14)
     first = font.render(result.assumption, True, DIM)
     second = font.render(f"V → 0 before landing: {result.speed_collapse_count}", True, DIM)
-    y = screen.get_height() - 188
-    screen.blit(first, (DOCK_WIDTH + 16, y))
-    screen.blit(second, (DOCK_WIDTH + 16, y + 18))
+    y = 688
+    screen.blit(first, (16, y))
+    screen.blit(second, (16, y + 16))
 
 
 def draw_progress(screen: pygame.Surface, caption: str, fraction: float) -> None:
@@ -381,7 +384,7 @@ def draw_heatmap_view(
     gamma0_deg: float,
 ) -> None:
     """Landing range in place of the sky. The peak is whatever the grid computed."""
-    rect = pygame.Rect(DOCK_WIDTH + 8, 44, screen.get_width() - DOCK_WIDTH - TELEMETRY_WIDTH - 16, screen.get_height() - 120)
+    rect = pygame.Rect(8, 8, screen.get_width() - 16, 532)
     screen.fill((8, 12, 22), rect)
     finite = grid.range_m[np.isfinite(grid.range_m)]
     low = float(np.min(finite)) if finite.size else 0.0

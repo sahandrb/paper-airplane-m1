@@ -7,9 +7,23 @@ import pytest
 from paper_airplane.sprite_geometry import (
     alpha_centroid,
     anchor_screen_position,
+    clamp_sprite_center_y,
     pivoted_center,
+    rail_seat_offset,
     rotate_offset,
 )
+
+
+def test_level_rail_lifts_the_blit_and_the_horizon_holds_the_sprite() -> None:
+    shift = rail_seat_offset(0.0, 18.0)
+    assert shift[0] == pytest.approx(0.0)
+    assert shift[1] == pytest.approx(-(9.0 + 10.0))
+    assert shift[1] < 0.0
+    held = clamp_sprite_center_y(540.0, 30.0, 548.0)
+    assert held == pytest.approx(548.0 - 15.0)
+    assert held + 15.0 <= 548.0
+    clear = clamp_sprite_center_y(400.0, 30.0, 548.0)
+    assert clear == pytest.approx(400.0)
 
 
 def test_positive_theta_raises_a_right_pointing_nose() -> None:

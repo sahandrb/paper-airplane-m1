@@ -13,18 +13,23 @@ from paper_airplane.app.prelaunch import (
     LaunchInputs,
     alpha_arc_label,
     arc_points,
+    art_pivot_screen,
     cg_within_spec,
     dash_segments,
     launcher_scale,
     pivot_screen,
     ramp_rotation_deg,
-    scale_caption,
     theta0_deg,
 )
-from paper_airplane.app.theme import ACCENT, PREVIEW, TEXT, label_font, number_font
+from paper_airplane.app.theme import ACCENT, PREVIEW, number_font
 from paper_airplane.config import Config
 from paper_airplane.simulation import Trajectory
-from paper_airplane.sprite_geometry import alpha_centroid, pivoted_center
+from paper_airplane.sprite_geometry import (
+    alpha_centroid,
+    clamp_sprite_center_y,
+    pivoted_center,
+    rail_seating_row,
+)
 
 log = logging.getLogger(__name__)
 
@@ -40,6 +45,7 @@ class Piece:
     image: pygame.Surface
     anchor_px: tuple[float, float]
     painted: bool
+    seat_px: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -48,6 +54,8 @@ class FlightArt:
     ramp: Piece
     dart: Piece
     warnings: tuple[str, ...]
+    seating_row: float = 0.0
+    source_height: float = 0.0
 
 
 def load_flight_art(
@@ -57,9 +65,25 @@ def load_flight_art(
 ) -> FlightArt:
     """Scale the dart and split the catapult. A missing file becomes a plain shape."""
     warnings: list[str] = []
-    pillar, ramp = _load_launcher(launcher, config, warnings)
+    seating_row = 0.0
+    source_height = 0.0
+    if launcher is not None:
+        seating_row = rail_seating_row(
+            pygame.surfarray.array_alpha(launcher),
+            config.launcher_pivot_px,
+            config.launcher_rest_gamma_deg,
+        )
+        source_height = float(launcher.get_height())
+    pillar, ramp = _load_launcher(launcher, config, warnings, seating_row, source_height)
     dart = _load_dart(root, config, warnings)
-    return FlightArt(pillar=pillar, ramp=ramp, dart=dart, warnings=tuple(warnings))
+    return FlightArt(
+        pillar=pillar,
+        ramp=ramp,
+        dart=dart,
+        warnings=tuple(warnings),
+        seating_row=seating_row,
+        source_height=source_height,
+    )
 
 
 def draw_preview_path(
@@ -82,10 +106,15 @@ def draw_pose(
     *,
     dart_world: tuple[float, float] | None = None,
     dart_theta_deg: float | None = None,
+    seat_gamma_deg: float | None = None,
     show_arc: bool = True,
 ) -> None:
-    """Pillar and ramp stay in the world. The dart is on the rail or at ``dart_world``."""
-    hinge = pivot_screen(camera, config)
+    """Pillar and ramp stay in the world. The dart CG is the launch point, or ``dart_world``."""
+    del seat_gamma_deg
+    launch = pivot_screen(camera, config)
+    hinge = launch
+    if art.ramp.painted and art.source_height > 0.0:
+        hinge = art_pivot_screen(camera, config, art.seating_row, art.source_height)
     _blit_piece(screen, art.pillar, hinge, 0.0)
     _blit_piece(
         screen,
@@ -94,23 +123,26 @@ def draw_pose(
         ramp_rotation_deg(inputs.gamma0_deg, config, painted=art.ramp.painted),
     )
     if dart_world is None:
-        _blit_piece(screen, art.dart, hinge, theta0_deg(inputs, config))
+        place = launch
+        angle = theta0_deg(inputs, config)
     else:
         place = camera.to_screen(dart_world[0], dart_world[1], config.pixels_per_metre)
-        _blit_piece(screen, art.dart, place, theta0_deg(inputs, config) if dart_theta_deg is None else dart_theta_deg)
+        angle = theta0_deg(inputs, config) if dart_theta_deg is None else dart_theta_deg
+    _blit_dart(screen, art.dart, place, angle, camera.cam_y)
     if show_arc and dart_world is None:
-        _draw_alpha_arc(screen, hinge, inputs, config)
-    _draw_scale(screen, camera, config)
+        _draw_alpha_arc(screen, launch, inputs, config)
 
 
 def _load_launcher(
     launcher: pygame.Surface | None,
     config: Config,
     warnings: list[str],
+    seating_row: float,
+    source_height: float,
 ) -> tuple[Piece, Piece]:
     if launcher is None:
         return _fallback_pillar(config), _fallback_ramp()
-    scale = launcher_scale(config)
+    scale = launcher_scale(config, seating_row=seating_row, source_height=source_height)
     pillar = _scaled_crop(launcher, config.launcher_pillar_crop, scale)
     ramp = _scaled_crop(launcher, config.launcher_ramp_crop, scale)
     pivot_x, pivot_y = config.launcher_pivot_px
@@ -195,6 +227,20 @@ def _fallback_dart(config: Config) -> Piece:
     return Piece(surface, measured, painted=False)
 
 
+def _blit_dart(
+    screen: pygame.Surface,
+    piece: Piece,
+    anchor_screen: tuple[float, float],
+    angle_deg: float,
+    horizon_y: float,
+) -> None:
+    """Draw the dart with its CG on the launch point, never below the horizon."""
+    rotated = pygame.transform.rotate(piece.image, angle_deg)
+    center = pivoted_center(anchor_screen, piece.image.get_size(), piece.anchor_px, angle_deg)
+    center_y = clamp_sprite_center_y(center[1], float(rotated.get_height()), horizon_y)
+    screen.blit(rotated, rotated.get_rect(center=(round(center[0]), round(center_y))))
+
+
 def _blit_piece(screen: pygame.Surface, piece: Piece, anchor_screen: tuple[float, float], angle_deg: float) -> None:
     rotated = pygame.transform.rotate(piece.image, angle_deg)
     center = pivoted_center(anchor_screen, piece.image.get_size(), piece.anchor_px, angle_deg)
@@ -229,19 +275,3 @@ def _draw_alpha_arc(
     mid = arc_points(hinge, 52.0, inputs.gamma0_deg, sweep, count=2)[1]
     screen.blit(label, (round(mid[0]) + 6, round(mid[1]) - label.get_height() // 2))
 
-
-def _draw_scale(screen: pygame.Surface, camera: Camera, config: Config) -> None:
-    """2 m bar and the not-to-scale caption, in the sky to the right of the dock."""
-    length = int(round(2.0 * config.pixels_per_metre))
-    x = 328
-    y = int(round(camera.cam_y)) - 36
-    caption = number_font(15).render(scale_caption(config), True, TEXT)
-    metres = number_font(15).render("2 m", True, TEXT)
-    backing = pygame.Surface((max(length, caption.get_width()) + 16, caption.get_height() + 28), pygame.SRCALPHA)
-    backing.fill((12, 16, 28, 160))
-    screen.blit(backing, (x - 8, y - caption.get_height() - 14))
-    screen.blit(caption, (x, y - caption.get_height() - 8))
-    pygame.draw.line(screen, TEXT, (x, y), (x + length, y), 2)
-    pygame.draw.line(screen, TEXT, (x, y - 6), (x, y + 6), 2)
-    pygame.draw.line(screen, TEXT, (x + length, y - 6), (x + length, y + 6), 2)
-    screen.blit(metres, (x + length + 8, y - metres.get_height() // 2))

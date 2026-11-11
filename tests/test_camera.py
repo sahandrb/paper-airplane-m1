@@ -44,13 +44,15 @@ def test_world_to_screen_uses_one_scale_on_both_axes() -> None:
 
 
 def test_unsplit_launcher_seat_is_two_metres_above_the_ground() -> None:
-    left, top, _drawn_w, drawn_h = unsplit_launcher_dest(DEFAULT_CONFIG)
-    pivot_y = DEFAULT_CONFIG.launcher_pivot_px[1]
+    seating_row = 17.0
+    left, top, _drawn_w, drawn_h = unsplit_launcher_dest(DEFAULT_CONFIG, seating_row=seating_row)
     scale = drawn_h / 279
-    seat_y = top + pivot_y * scale
+    seat_y = top + seating_row * scale
+    pivot_y = top + DEFAULT_CONFIG.launcher_pivot_px[1] * scale
     assert left == pytest.approx(0.08 * 1280)
     assert seat_y == pytest.approx(548 - 2.0 * 83.5)
     assert seat_y == pytest.approx(381)
+    assert pivot_y > seat_y
 
 
 def test_ground_scroll_keeps_range_zero_on_the_launcher_pixel() -> None:

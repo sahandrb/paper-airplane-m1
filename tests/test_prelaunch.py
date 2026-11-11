@@ -35,7 +35,7 @@ from paper_airplane.app.prelaunch import (
 )
 from paper_airplane.config import DEFAULT_CONFIG
 from paper_airplane.equilibrium import alpha_star_deg, gamma_star_deg, v_star
-from paper_airplane.sprite_geometry import alpha_centroid
+from paper_airplane.sprite_geometry import alpha_centroid, rail_seating_row
 
 
 def test_rest_ramp_has_no_extra_rotation_and_the_seat_is_two_metres_up() -> None:
@@ -45,7 +45,8 @@ def test_rest_ramp_has_no_extra_rotation_and_the_seat_is_two_metres_up() -> None
     assert seat_y == pytest.approx(381)
     assert seat_y == pytest.approx(548 - 2.0 * 83.5)
     assert ramp_rotation_deg(16.1, DEFAULT_CONFIG, painted=True) == pytest.approx(0.0)
-    assert launcher_scale(DEFAULT_CONFIG) * 155 == pytest.approx(167.0)
+    scale = launcher_scale(DEFAULT_CONFIG, seating_row=17.0, source_height=279.0)
+    assert scale * (279.0 - 17.0) == pytest.approx(167.0)
 
 
 def test_presets_match_the_professor_cases() -> None:
@@ -80,10 +81,33 @@ def test_buckle_sentence_appears_only_above_5_metres_per_second() -> None:
     assert "10.65 m/s" in BUCKLE_WARNING
 
 
+def test_measured_rail_seat_scales_the_launcher_to_about_170_px() -> None:
+    pygame.display.init()
+    pygame.display.set_mode((64, 64))
+    image = pygame.image.load(str(project_root() / "assets" / "launcher" / "catapult.png")).convert_alpha()
+    row = rail_seating_row(
+        pygame.surfarray.array_alpha(image),
+        DEFAULT_CONFIG.launcher_pivot_px,
+        DEFAULT_CONFIG.launcher_rest_gamma_deg,
+    )
+    from paper_airplane.app.camera import unsplit_launcher_dest
+
+    _left, top, _width, drawn_h = unsplit_launcher_dest(
+        DEFAULT_CONFIG,
+        image.get_size(),
+        seating_row=row,
+    )
+    scale = drawn_h / image.get_height()
+    assert top + row * scale == pytest.approx(381.0)
+    assert drawn_h == pytest.approx(170.0, abs=15.0)
+    assert row < DEFAULT_CONFIG.launcher_pivot_px[1]
+
+
 def test_alpha_label_and_scale_caption() -> None:
     assert alpha_arc_label(DEFAULT_CONFIG) == f"alpha = {alpha_star_deg(DEFAULT_CONFIG):.2f} deg"
     assert alpha_arc_label(DEFAULT_CONFIG) == "alpha = 9.77 deg"
     caption = scale_caption(DEFAULT_CONFIG)
+    assert DEFAULT_CONFIG.sprite_display_length_px == 110
     assert caption.startswith("SPRITE NOT TO SCALE \u00d7")
     assert caption.endswith("9.4")
 

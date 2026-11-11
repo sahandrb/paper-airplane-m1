@@ -52,6 +52,56 @@ def anchor_screen_position(
     return (image_center[0] + rotated[0], image_center[1] + rotated[1])
 
 
+def rail_seat_offset(gamma_deg: float, thickness_px: float, extra_px: float = 10.0) -> tuple[float, float]:
+    """Shift from the center of mass onto the rail, along the upward normal.
+
+    At ``gamma = 0`` the shift is straight up the screen (negative y).
+    ``thickness_px`` is the unrotated sprite height.
+    """
+    distance = thickness_px / 2.0 + extra_px
+    return rotate_offset(0.0, -distance, gamma_deg)
+
+
+def clamp_sprite_center_y(center_y: float, drawn_height: float, horizon_y: float) -> float:
+    """Keep the bottom of the drawn sprite on or above the horizon line."""
+    half = drawn_height / 2.0
+    if center_y + half > horizon_y:
+        return horizon_y - half
+    return center_y
+
+
+def rail_seating_row(
+    alpha_xy: np.ndarray,
+    pivot_px: tuple[float, float],
+    rest_gamma_deg: float,
+    threshold: float = 40.0,
+) -> float:
+    """Source row of the toothed rail beside the pivot, at the painted angle.
+
+    ``alpha_xy`` has shape ``(width, height)``. Columns to the right of the
+    pivot follow the painted rail. The linkage is on the other side, and the
+    pivot row itself is the hinge, not the seat.
+    """
+    alpha = np.asarray(alpha_xy)
+    _width, _height = alpha.shape
+    pivot_x, pivot_y = pivot_px
+    along = rotate_offset(1.0, 0.0, rest_gamma_deg)
+    rows: list[float] = []
+    for step in range(10, 110, 2):
+        x = int(round(pivot_x + along[0] * step))
+        if x < 0 or x >= alpha.shape[0]:
+            continue
+        column = alpha[x]
+        opaque = np.nonzero(column > threshold)[0]
+        above = opaque[opaque < pivot_y - 2.0]
+        if above.size:
+            rows.append(float(above[0]))
+    if not rows:
+        raise ValueError("rail bed has no opaque pixels beside the pivot")
+    rows.sort()
+    return rows[len(rows) // 2]
+
+
 def alpha_centroid(alpha_xy: np.ndarray, threshold: float = 16.0) -> tuple[float, float]:
     """Mean of pixels with alpha above ``threshold``.
 

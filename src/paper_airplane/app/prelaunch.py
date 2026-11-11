@@ -157,10 +157,29 @@ def ramp_rotation_deg(gamma0_deg: float, config: Config, *, painted: bool) -> fl
     return gamma0_deg
 
 
-def launcher_scale(config: Config) -> float:
-    """Pixels of catapult art per source pixel, so the pillar spans h = 0 to h = 2."""
-    _x, _y, _w, height = config.launcher_pillar_crop
-    return (config.pixels_per_metre * config.h0_m) / height
+def launcher_scale(config: Config, *, seating_row: float, source_height: float) -> float:
+    """Pixels of catapult art per source pixel.
+
+    The 2 m line runs from the base of the image to the rail seating row,
+    not to the pivot.
+    """
+    span = source_height - seating_row
+    if span <= 0:
+        raise ValueError("seating row must sit above the base of the catapult")
+    return (config.pixels_per_metre * config.h0_m) / span
+
+
+def art_pivot_screen(
+    camera: Camera,
+    config: Config,
+    seating_row: float,
+    source_height: float,
+) -> tuple[float, float]:
+    """Screen position of the hinge once the seating row is on ``h = h0``."""
+    launch_x, launch_y = pivot_screen(camera, config)
+    scale = launcher_scale(config, seating_row=seating_row, source_height=source_height)
+    drop = (config.launcher_pivot_px[1] - seating_row) * scale
+    return (launch_x, launch_y + drop)
 
 
 def pivot_screen(camera: Camera, config: Config) -> tuple[float, float]:

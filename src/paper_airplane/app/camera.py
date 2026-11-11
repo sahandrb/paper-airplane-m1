@@ -98,17 +98,20 @@ def visible_metre_marks(camera: Camera, width_px: int, pixels_per_metre: float) 
 def unsplit_launcher_dest(
     config: Config,
     source_size: tuple[int, int] = (330, 279),
+    *,
+    seating_row: float,
 ) -> tuple[float, float, float, float]:
     """Top-left and drawn size of the whole catapult, before the ramp is split.
 
-    The painted pivot row sits on the launch height ``h0``. The base of the
-    image sits on ``h = 0``. ``source_size`` is the catapult art, 330 by 279.
+    ``seating_row`` is the rail bed in the source image, not the pivot row.
+    The base of the image sits on ``h = 0`` and that row sits on ``h = h0``.
+    ``source_size`` is the catapult art, 330 by 279.
     """
     source_w, source_h = source_size
-    base_to_pivot = source_h - config.launcher_pivot_px[1]
-    if base_to_pivot <= 0:
-        raise ValueError("launcher pivot must sit above the bottom of the image")
-    scale = (config.pixels_per_metre * config.h0_m) / base_to_pivot
+    span = source_h - seating_row
+    if span <= 0:
+        raise ValueError("seating row must sit above the base of the catapult")
+    scale = (config.pixels_per_metre * config.h0_m) / span
     drawn_w = source_w * scale
     drawn_h = source_h * scale
     left = config.prelaunch_launcher_x_frac * config.window_width_px
