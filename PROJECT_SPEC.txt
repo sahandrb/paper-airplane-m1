@@ -1,0 +1,1472 @@
+==========================================================================================
+ PROJECT SPECIFICATION — PAPER AIRPLANE FLIGHT LAB
+ File: PROJECT_SPEC.txt   (single source of truth — read fully before writing any code)
+ Version: 1.0   Date: 2026-11-11
+ Author: Sahand Ranjbaripour (GitHub: sahandrb) — University of Tehran
+ Supervisor (acknowledged, not a co-author): Prof. Amiri Atashgah
+ Course: Flight Dynamics, University of Tehran
+ Model: Stengel, Flight Dynamics (2005), Example 1.3-1
+ Write 'University of Tehran' only — do not invent a faculty or department name.
+ Write the supervisor's name exactly as 'Prof. Amiri Atashgah' — do not add another first name.
+==========================================================================================
+
+------------------------------------------------------------------------------------------
+0. INSTRUCTIONS FOR THE AI CODING AGENT (READ FIRST)
+------------------------------------------------------------------------------------------
+- You are building this project from scratch, following THIS file only.
+- Everything (scenario, physics, numbers, UI, structure, docs, tests) is defined here.
+  Do not invent physics, coefficients, inertias, pitching-moment data, or features
+  that are not listed. If a number is not in Section 4 or 12, do not hard-code it
+  as if it came from Stengel.
+- Where this file says "CONFIG", the value lives in src/paper_airplane/config.py so it
+  can be changed without touching other code.
+- Where this file says "ASSUMPTION", label it "Assumption" in the UI (small grey text)
+  and in the documentation. These are not from the homework.
+- Language of code, comments, UI and docs: English.
+- PHASE-BY-PHASE RULE (strict): build ONE phase of Section 15 at a time, only the
+  phase the user names (e.g. "Implement M1 only"; phases are M1..M8). When it is done: run the
+  tests, run the app if the UI exists, print a short summary of what changed and
+  the exact suggested commit message (conventional commits, e.g.
+  "feat: add point-mass equations and RK23 solver"), then STOP and wait.
+  NEVER run `git commit` or `git push` yourself; the user reviews and commits.
+  NEVER start the next phase unless the user asks for it.
+- Physics modules must not import pygame (or pygame-ce). They must be unit-testable
+  headless. The sprite-rotation helper that maps pitch to a blit offset is allowed
+  to be pygame-free math in its own module (mirror the idea of sprite_geometry.py
+  in the Cessna reference project, but do NOT copy its display-angle smoother).
+- Displayed pitch is ALWAYS the instantaneous theta = alpha_star + gamma.
+  Do NOT ease, lag, filter, or interpolate the sprite angle or any telemetry number.
+  Camera translation may be lightly smoothed; aircraft state may not.
+
+0.1 THIS IS A NEW, SEPARATE GIT REPOSITORY
+    Repository name:  paper-airplane-flight-lab
+    Python package:   paper_airplane
+    Suggested GitHub: sahandrb/paper-airplane-flight-lab
+
+    The existing repository cessna172-glide-stall-simulator is REFERENCE ONLY.
+    You must NOT modify it, add files to it, commit to it, or push to it.
+    Do not open a PR against it. Do not copy its .git directory.
+    You may read it to match structure and quality (src-layout, tests, docs).
+
+    Create the project in a NEW directory named paper-airplane-flight-lab
+    (next to, never inside, any clone of the Cessna repo).
+
+    Create-new-repo steps (do these; do not skip):
+      1. mkdir paper-airplane-flight-lab && cd paper-airplane-flight-lab
+      2. git init -b main
+      3. Build the tree from this spec (Section 10). Copy the three art files
+         into the paths in Section 7.3. Write ATTRIBUTION.md.
+      4. After Milestone 1 (skeleton + README + LICENSE + pyproject + .gitignore
+         + copied assets), make the first commit:
+            (user runs) git add -A && git commit -m "chore: initial project skeleton"
+      5. The owner creates an empty GitHub repository named
+            sahandrb/paper-airplane-flight-lab
+         manually in the browser (do not invent a different name). Then:
+            git remote add origin git@github.com:sahandrb/paper-airplane-flight-lab.git
+         Do NOT push unless the owner explicitly asks you to push.
+         NEVER add a remote pointing at cessna172-glide-stall-simulator.
+
+0.2 QUALITY LESSONS FROM THE CESSNA PROJECT (do not repeat these mistakes)
+    - No display lag on pitch: the Cessna app eased the drawn theta over 0.15 s.
+      That made the nose disagree with the telemetry. Do not do that. If you
+      write a smooth_display_angle helper, do not call it.
+    - World scale is isotropic (same pixels-per-metre in x and y) so loops are
+      not stretched into ovals. A labelled scale bar is always visible.
+    - The dart sprite is larger than true scale (it would otherwise be ~5 px).
+      Label it clearly: "SPRITE NOT TO SCALE ×N".
+    - README install instructions must be cross-platform (Linux/macOS and Windows).
+    - No stray files in the repo root (no screenshots, no leftover "doc" files,
+      no editor junk). Generated plots and CSVs go under outputs/ (gitignored).
+      Runtime artifacts never land in the repository root.
+
+------------------------------------------------------------------------------------------
+1. PURPOSE
+------------------------------------------------------------------------------------------
+A 2D, side-view engineering "Paper Airplane Flight Lab" that reproduces
+Stengel Flight Dynamics (2005) Example 1.3-1 (the same MATLAB the professor
+issued) and then lets the user explore the same point-mass model interactively.
+
+It is NOT a game: no score, no points, no crash explosions, no sound required.
+
+What it teaches, visually:
+  - Equilibrium glide at (L/D)max (case a): a straight path at constant V and gamma.
+  - The phugoid mode (cases b, c): kinetic and potential energy trade places
+    at nearly constant angle of attack.
+  - Why a fast throw (case d, 3 V*) loops: lift scales with V^2.
+  - The difference between Reference integration (tf = 6 s, altitude may go
+    negative — that is what the professor's code does) and Physical flight
+    (stop at h = 0).
+  - That this model is a point mass: the nose follows the path with a fixed
+    alpha, there is no pitch inertia, and two identical launches produce
+    identical trajectories.
+
+The homework MATLAB is Example 1.3-1 / PaperPlane.m (Stengel). Four cases,
+ode23, tf = 6 s, no ground event.
+
+------------------------------------------------------------------------------------------
+2. STRICT SCOPE RULES
+------------------------------------------------------------------------------------------
+INCLUDED:
+  - The professor's point-mass longitudinal model (Section 4), exactly.
+  - Interactive pre-launch (live V0, gamma0, rotating ramp and airplane,
+    dashed predicted trajectory).
+  - Real-time playback of a precomputed trajectory with a persistent trail.
+  - Modes: Reference, Physical, Phugoid panel, Monte Carlo, range heatmap.
+    Overlaying several launches is done with RESTART (keeps trails), not a
+    separate physics model.
+  - Matplotlib exports that reproduce the professor's two figures.
+  - A linearized phugoid overlay about equilibrium (same point-mass model).
+
+NOT INCLUDED (do NOT add):
+  - Rigid-body pitch dynamics (theta, q, Cm, Iy) as a shipped feature.
+    Section 17 lists this only as optional future work and FORBIDS invented
+    values for Iy, Cm, or a measured chord used as if it were homework data.
+  - Wind, gusts, turbulence.
+  - Stall (CL is constant). Do not add a stall model.
+  - 3D graphics, scoring, explosions, landing-gear, ground effect, CFD.
+  - Any modification of the Cessna repository.
+
+ALL extra modes (Physical stop, phugoid overlay, Monte Carlo, heatmap, live
+sliders) use the SAME four-state point-mass equations and the SAME constant
+CL, CD. They are visualizations and analyses of that model, not new physics.
+
+------------------------------------------------------------------------------------------
+3. SCENARIO WALKTHROUGH (WHAT THE USER EXPERIENCES)
+------------------------------------------------------------------------------------------
+3.1 Home screen / pre-launch
+    The window opens on a dusk field (Section 7). A rubber-band catapult sits
+    on the ground. The paper dart rests on the ramp. The top of the ramp —
+    the launch point — is at the professor's initial height H = 2 m, range
+    r = 0.
+
+    The user changes launch speed V0 and flight-path angle gamma0 with
+    sliders and keyboard, LIVE, before anything is integrated:
+      - The ramp rotates to gamma0 about its hinge on the pillar
+        (the pillar stays upright).
+      - The airplane sprite rotates to
+            theta0 = alpha_star + gamma0
+        so the nose sits alpha_star (~9.77 deg) above the ramp. This is
+        intentional and pedagogical: the ramp is the velocity direction
+        (gamma); the body is at theta; the wedge between them is alpha.
+      - A short arc between the ramp and the fuselage is labelled
+        "alpha = 9.77 deg" (live value of alpha_star, which is constant).
+      - A dashed predicted-trajectory preview updates in real time: the
+        same solver as a real launch, from the current (V0, gamma0, h=2, r=0),
+        using the current mode's termination (Reference: 6 s, no ground stop;
+        Physical / Monte Carlo preview: terminal event h = 0, direction -1).
+      - Numeric readouts: V0 (m/s and as a multiple of V*), gamma0 (deg),
+        theta0 (deg), alpha_star (deg), and — in Physical mode — the
+        predicted landing range and flight time.
+
+    Preset buttons (also keys 1-4):
+      A  Equilibrium glide     V0 = V*,      gamma0 = gamma*
+      B  Horizontal, V*        V0 = V*,      gamma0 = 0
+      C  Horizontal, 1.5 V*    V0 = 1.5 V*,  gamma0 = 0
+      D  Horizontal, 3 V*      V0 = 3 V*,    gamma0 = 0
+    Pressing a preset snaps the sliders, ramp, sprite, and preview.
+
+    Slider ranges (CONFIG, justified in Section 7.2):
+      V0     = 1.0 .. 12.0 m/s     step 0.05 m/s   default V*
+      gamma0 = -40 .. +50 deg      step 0.5 deg    default gamma*
+    1.0 m/s is a limp toss (the airplane still has CL so it does not
+    free-fall like a stone). 12.0 m/s is just above 3 V* = 10.648 m/s so
+    case D is not parked on the end stop. Angles cover a downward throw,
+    the equilibrium glide (−10.28 deg), a level toss, and a lofted toss.
+    A caution banner appears when V0 > 5 m/s:
+      "Stengel notes that a real paper wing may buckle above ~5 m/s.
+       Case d (3 V* ≈ 10.65 m/s) is a numerical demonstration."
+    Source of the 5 m/s remark: Stengel's Paper Airplane Simulation page
+    (Section 14). This is a documentation warning, not a model change.
+
+    Two buttons are always visible on the home/pre-launch screen:
+
+      RESET
+        - Clears ALL stored trails and the trail legend.
+        - Returns the airplane to the launcher at the current sliders
+          (or the last used V0, gamma0 — do not wipe the sliders).
+        - Resets the camera to the pre-launch framing (Section 7.2).
+        - Clears any finished-run result numbers from the HUD.
+        Use this to start a clean session.
+
+      RESTART
+        - Returns the airplane to the launcher (pre-launch pose, same
+          sliders) and resets the camera to the pre-launch framing.
+        - Does NOT clear trails or legend entries.
+        - The next Launch will draw a NEW trail in the next colour and
+          add a new legend row (V0, gamma0, and the range once known).
+        Use this to overlay several flights, including cases A-D.
+
+    After a run has finished, both buttons remain available (the finished
+    airplane can freeze at its last point or snap back only when the user
+    presses RESET or RESTART). A separate LAUNCH control (Space / button)
+    starts a new integration from the current sliders.
+
+    Additional pre-launch controls: mode selector (Reference, Physical,
+    Phugoid, Monte Carlo, Heatmap), playback-speed setting that will apply
+    after launch (0.25× / 1× / 4×), and in Monte Carlo mode the N / sigma
+    sliders (Section 3.4).
+
+3.2 Flight
+    On Launch the full trajectory is PRECOMPUTED with solve_ivp (Section 6)
+    and then played back locked to simulation time:
+        t_sim += speed_factor * dt_wall
+    The user does not change V0 or gamma0 during a run (those are initial
+    conditions). Playback speed 0.25× / 1× / 4× can be changed while the
+    clip plays.
+
+    What is drawn:
+      - The airplane sprite at the interpolated (r(t), h(t)), rotated by
+        the instantaneous theta(t) = alpha_star + gamma(t). No lag.
+      - A persistent coloured trail of that run, stored in WORLD
+        coordinates (r, h) like the Cessna project. The trail stays after
+        the run ends. Previous runs' trails stay unless RESET was pressed.
+      - Live telemetry panel (Section 7.6).
+      - In Reference mode, the portion of a trail with h < 0 is drawn
+        dashed, over a hatched "below ground" band, with a note:
+        "Reference mode: integration continues below h = 0
+         (professor / Stengel, tf = 6 s)."
+      - In Physical mode the run stops at the ground event; the HUD
+        reports flight time and landing range.
+
+    When t_sim reaches the final sample the view freezes on the last state
+    (or the landing point) and the results strip appears: flight time,
+    range (see definition in 3.3), min/max V and gamma, plus
+    Show plots / Export / RESET / RESTART.
+
+3.3 Results, range definition, trail legend
+    Each completed run appends one legend entry with:
+      - colour swatch (the trail colour)
+      - V0 in m/s
+      - gamma0 in degrees
+      - range, defined as:
+          Physical, Monte Carlo sample:  r at the h = 0 event
+          Reference, Phugoid (6 s):      r at t = 6 s, labelled "r(6 s)"
+            so it is not confused with a landing range
+    A small on-screen legend (top of the world view or under the HUD)
+    lists runs in order, e.g.
+        ■  A  V0=3.55 m/s   γ0=−10.3°   r(6 s)=20.95 m
+        ■  B  V0=3.55 m/s   γ0=  0.0°   r(6 s)=20.82 m
+    Overflow: keep the last CONFIG max_legend = 12 entries visible and
+    allow scrolling; trails themselves may go up to CONFIG max_trails = 24
+    before the oldest is dropped (tell the user in a one-line hint).
+
+    Show plots opens matplotlib figures (Section 8).
+    Export writes PNG + CSV into outputs/run_YYYYMMDD_HHMMSS/ (gitignored).
+
+    There is also a headless CLI (Section 10):
+        python -m paper_airplane --reference-plots
+        python -m paper_airplane --heatmap
+
+3.4 Modes
+    REFERENCE
+      Integrates each launch to tf = 6 s with NO ground event, matching
+      the professor. Altitude may become negative (case a ends at
+      h ≈ −1.801 m). A-D presets reproduce Figure 1 and Figure 2.
+      A button "Drop A–D trails" computes all four Reference trajectories
+      and adds four coloured trails + legend rows without the user having
+      to fly each one (useful before defending the plots). Playback of a
+      single launch still uses the chosen preset or sliders.
+
+    PHYSICAL
+      Same equations, but solve_ivp is given a terminal event
+          h_event(t, x) = x[2]            # altitude
+          h_event.terminal  = True
+          h_event.direction = -1          # downward crossing only
+      Reports landing range and flight time. Expected values for A-D
+      are in Section 12. Does not produce negative h (except a numerical
+      1e-16-level overshoot at the event, which you must display as 0).
+
+    PHUGOID
+      One launch (current sliders) in either Reference timing (default,
+      tf = 6 s) so the linear vs nonlinear comparison is visible for
+      several periods. After (or during) playback:
+        - The nonlinear path is the solid trail.
+        - The linearized (V, gamma) solution about (V*, gamma*), converted
+          to (r, h) by the hybrid kinematics of Section 4.9, is drawn as
+          a contrasting dashed overlay.
+        - A live energy plot (KE, PE, total) is shown (bottom strip or
+          results figure). Total energy must fall; the drop equals the
+          work of drag (Section 4.8).
+        - Eigenvalues, period, and damping of the 2×2 Jacobian are shown,
+          computed in code, not hard-coded. Expected numbers: Section 4.9.
+        - If the perturbation is large (|δV|/V* > 0.3 or |δgamma| > 15 deg)
+          show: "Linear model is outside its small-perturbation region."
+          Case d must trigger this; the overlay will not loop (the linear
+          model cannot). That disagreement is the lesson.
+
+    MONTE CARLO
+      Still the Physical point-mass model. The user sets V0, gamma0 as
+      the mean throw, then:
+          N        CONFIG default 50, range 10..200
+          sigma_V  default 0.20 m/s     ASSUMPTION (hand-speed jitter)
+          sigma_gamma default 3.0 deg   ASSUMPTION (hand-angle jitter)
+      These sigmas are NOT from Stengel and NOT from a measured data set.
+      Label them "Assumption: illustrative hand-throw scatter".
+      Each sample: V0' ~ Normal(V0, sigma_V^2), gamma0' ~ Normal(gamma0,
+      sigma_gamma^2), independent, then Physical integration.
+      Draw N faint trails plus a landing-point histogram (or rug) on the
+      ground. Report mean and std of landing range, and the count of
+      samples that hit the V→0 guard before landing (if any).
+      Do not add one legend row per sample (that would be unreadable);
+      add a single summary row, e.g. "MC N=50  V0=… ± …  γ0=… ± …  r=… ± …".
+
+    HEATMAP
+      A results-style view (can replace the world view after a short
+      progress bar). Grid of Physical landings over the slider rectangle:
+          V0     linspace(1.0, 12.0, CONFIG nV=41)
+          gamma0 linspace(-40 deg, +50 deg, CONFIG nG=31)
+      Colour = landing range r_f. Mark cases A-D and the (V*, gamma*)
+      point. A computed maximum on this grid is expected near
+      r ≈ 16.00 m at about V0 ≈ 9.4 m/s, gamma0 ≈ −8 deg
+      (this spec's own RK23 survey, Section 7.2). Do not hard-code the
+      peak as a physical constant; compute it and allow a few-percent
+      tolerance in tests against that ballpark.
+      Recompute on a button; cache the last grid in memory.
+
+    Overlaying launches (the "Compare" capability) is not a sixth physics
+    mode: it is RESET vs RESTART on top of any of the modes above.
+
+------------------------------------------------------------------------------------------
+4. PHYSICS AND MATH (IMPLEMENT EXACTLY; EVERY NUMBER HAS A SOURCE)
+------------------------------------------------------------------------------------------
+4.1 Notation and units
+    Internal SI and radians. UI shows degrees, labelled.
+      V       true airspeed                        [m/s]
+      gamma   flight-path angle, positive up       [rad]
+      h       altitude above the ground plane      [m]
+      r       horizontal range                     [m]
+      alpha   angle of attack                      [rad]  (CONSTANT = alpha*)
+      theta   pitch = alpha + gamma                [rad]
+      q_dyn   dynamic pressure = 1/2 * rho * V^2   [Pa]
+      m, g, S, rho, CL, CD                         see 4.2
+    State vector: x = [V, gamma, h, r].  No control input during flight.
+
+4.2 Constants — from the professor's MATLAB (paper_airplane_readable.txt)
+    Use these literals. Do not replace g with 9.80665, and do not replace
+    the homework pi with a different value in the coefficient formulas.
+
+      S    = 0.017          # reference area            [m^2]
+      AR   = 0.86           # wing aspect ratio         [-]
+      e    = 0.9            # Oswald efficiency         [-]
+      m    = 0.003          # mass                      [kg]
+      g    = 9.8            # gravity                   [m/s^2]
+      rho  = 1.225          # sea-level air density     [kg/m^3]
+      CD0  = 0.02           # zero-lift drag CDo        [-]
+      H0   = 2.0            # initial height            [m]
+      R0   = 0.0            # initial range             [m]
+      TF   = 6.0            # Reference final time      [s]
+
+    The MATLAB file multiplies by the literal 3.141592 (not MATLAB's pi)
+    in CLa and epsilon:
+      PI_HOMEWORK = 3.141592
+    Use that named constant for CLa and epsilon so the validation table
+    matches numerical_checks.txt bit-for-bit at 1e-12 relative level.
+
+    Note (document in docs/theory.md, do not "fix"):
+      numpy.pi = 3.141592653589793 differs from 3.141592 by 6.54e-7.
+      That changes CLa by about 2.69e-7 /rad and epsilon by about
+      −8.56e-8 (this spec's computation). Negligible on a plot, but
+      tests compare against the homework-pi numbers.
+
+4.3 Derived geometry (not used in the EOM; used for display and Re note)
+    From the definitions AR = b^2 / S and S = b * c_mean:
+
+      b      = sqrt(AR * S) = 0.120913192001535 m     (12.09 cm)
+      c_mean = S / b        = 0.140596734885506 m     (14.06 cm)
+
+    Computed in this spec from the homework S and AR. The point-mass
+    equations never need b or c. Reynolds number at V*, using
+    nu_air ≈ 1.4607e-5 m^2/s (ISA 15 °C, a standard value — say so):
+      Re = V* * c_mean / nu ≈ 3.42e4
+    With the rounder nu = 1.5e-5 m^2/s: Re ≈ 3.33e4.
+    This belongs in docs/theory.md as context (low-Re limitation).
+
+4.4 Aerodynamic coefficients (computed once; CONSTANT during flight)
+
+    Helmbold / finite-wing lift slope (MATLAB line 11):
+
+      CLa = PI_HOMEWORK * AR / (1 + sqrt(1 + (AR/2)**2))
+          = 1.29362167202453   [1/rad]
+
+    This is algebraically identical to the uncompressed DATCOM form
+      CLa = 2 * PI * AR / (2 + sqrt(AR**2 + 4))
+    (same PI). Do not use the 2*pi infinite-wing slope: that would give
+    alpha* ≈ 2 deg instead of 9.77 deg.
+
+    Induced-drag factor (MATLAB line 13):
+
+      epsilon = 1 / (PI_HOMEWORK * e * AR)
+              = 0.411253168483586
+
+    Drag polar:  CD = CD0 + epsilon * CL**2
+
+    (L/D)max: maximise CL / (CD0 + epsilon CL^2). Setting the derivative
+    to zero gives CD0 = epsilon * CL^2, so
+
+      CL_star = sqrt(CD0 / epsilon)     = 0.220526289045093
+      CD_star = CD0 + epsilon*CL_star**2 = 0.04     exactly 2*CD0
+      LD_max  = CL_star / CD_star        = 5.51315722612733
+
+    CD is exactly 0.04 because at (L/D)max the induced drag equals CD0.
+    Numerical source for all of the above: recomputed in this spec from
+    the MATLAB formulas with PI_HOMEWORK; agrees with numerical_checks.txt.
+
+    Angle of attack (MATLAB line 19), CONSTANT because CL is locked:
+
+      alpha_star = CL_star / CLa
+                 = 0.170472011882708 rad
+                 = 9.76732680598316 deg
+
+4.5 Equilibrium glide (MATLAB lines 17-18)
+
+    Set Vdot = 0 and gammadot = 0 in Section 4.6. Dividing the two force
+    balances gives tan(gamma) = -CD/CL, hence
+
+      gamma_star = -atan(1 / LD_max)
+                 = -0.179433441298775 rad
+                 = -10.2807788899282 deg
+
+    Vertical force balance (lift and drag both have an upward component
+    in a descent) is what the professor coded:
+
+      V_star = sqrt( 2*m*g / (rho * S * (CL*cos(gamma) - CD*sin(gamma))) )
+             = 3.54937084251753 m/s
+
+    at gamma = gamma_star, CL = CL_star, CD = CD_star.
+
+    Equivalence (prove in docs/theory.md and test numerically):
+      From tan(gamma) = -CD/CL  =>  CD = -CL * tan(gamma).
+      Then CL cos(gamma) - CD sin(gamma) = CL / cos(gamma),
+      so V_star = sqrt( 2*m*g * cos(gamma) / (rho * S * CL) )
+      which is the familiar L = m g cos(gamma) form.
+    This spec verified the two expressions agree to 4e-16 m/s.
+    Also verified at equilibrium:
+      L = CL * q * S = m g cos(gamma*) = 0.0289279819899311 N
+      D = CD * q * S = -m g sin(gamma*) = 0.00524708090181773 N
+      W = m g = 0.0294 N
+      L cos(gamma*) - D sin(gamma*) = W   (vertical balance)
+
+    1.5 V* = 5.3240562637763 m/s
+    3   V* = 10.6481125275526 m/s
+
+    Pitch at equilibrium: theta* = alpha* + gamma* = -0.513452 deg
+    (the nose is slightly below the horizon while the path is −10.28 deg).
+
+    Case a identity, useful as a test: a Physical landing from (V*, gamma*,
+    h=H0) is a straight line, so
+      r_land = H0 * LD_max = 11.0263144522547 m
+      t_land = -H0 / (V* * sin(gamma*)) = 3.15724430361001 s
+    (this spec; matches the event-detected values in Section 12).
+
+4.6 Equations of motion (MATLAB EqMotion, lines 53-62)
+    q_dyn = 0.5 * rho * V**2
+
+      Vdot     = (-CD * q_dyn * S - m * g * sin(gamma)) / m
+      gammadot = ( CL * q_dyn * S - m * g * cos(gamma)) / (m * V)
+      hdot     = V * sin(gamma)
+      rdot     = V * cos(gamma)
+
+    Same signs as the professor. Same signs as the Cessna project's glide
+    equations (the paper airplane simply has constant CL, CD and no
+    thrust). State: x = [V, gamma, h, r].
+
+    V → 0 guard: gammadot divides by V. In dynamics.rhs, if
+    V < CONFIG V_EPS (1e-9), do not divide; raise a clear error or return
+    a finite dummy — simulation.py must never feed V <= 0 to the RHS.
+    Integration stops if V < CONFIG V_MIN_STOP = 0.05 m/s, with status
+    "speed collapsed (V → 0); gammadot is singular". A survey of the
+    recommended slider box saw V as low as ~0.012 m/s on some lofted
+    throws, so the guard is necessary. Reference cases A-D stay above
+    2.099 m/s (case d minimum; numerical_checks.txt).
+
+4.7 The three angles
+      gamma  = angle of the velocity vector above the horizon
+      theta  = angle of the body (dart centreline) above the horizon
+      alpha  = theta - gamma   (= alpha_star, constant, ~9.77 deg)
+      hence  theta(t) = alpha_star + gamma(t)
+
+    The sprite is rotated by theta(t), not by gamma(t). The velocity
+    vector / preview-tangent / ramp is at gamma. Drawing theta = gamma
+    would hide angle of attack and is wrong.
+
+    This rotation is KINEMATIC, not DYNAMIC: there is no pitch rate q
+    and no moment equation. Document that in the HUD (small grey line
+    "point-mass: alpha fixed, no pitch inertia") and in docs/theory.md.
+    Stengel himself notes that angular dynamics are omitted and matter
+    especially for the loop.
+
+4.8 Mechanical energy
+      KE = 0.5 * m * V**2
+      PE = m * g * h            # datum h = 0 (the ground plane)
+      E  = KE + PE
+
+    Lift is perpendicular to V and does no work. Drag dissipates energy:
+      dE/dt = - D * V
+    so  E(t) - E(0) = - ∫ D V dt.
+    This spec checked case a over 0..6 s:
+      E(0) = 7.7697050067e-02 J
+      E(6) = -3.4045965701e-02 J     # negative PE because h(6) < 0
+      ΔE   = -1.1174301577e-01 J
+      ∫ D V dt = 1.1174301577e-01 J
+      residual |ΔE + ∫DV dt| ≈ 1.6e-13 J
+    Test this. The live energy plot must show KE and PE exchanging (the
+    phugoid) while E declines monotonically (drag). In Reference mode PE
+    may become negative; that is consistent with the h < 0 datum.
+
+4.9 Linearized phugoid (derived and numerically verified in this spec)
+    Density is constant, so (h, r) do not feed back into (V, gamma).
+    Linearize the (V, gamma) subsystem about x* = (V*, gamma*).
+
+    Write
+      f_V = -k_D V^2 - g sin(gamma),     k_D = CD * rho * S / (2 m)
+      f_G =  k_L V   - (g / V) cos(gamma), k_L = CL * rho * S / (2 m)
+
+    Jacobian J = [[∂f_V/∂V, ∂f_V/∂gamma],
+                  [∂f_G/∂V, ∂f_G/∂gamma]]:
+
+      ∂f_V/∂V     = -CD * rho * V * S / m
+      ∂f_V/∂gamma = -g * cos(gamma)
+      ∂f_G/∂V     =  CL * rho * S / (2 m) + g * cos(gamma) / V**2
+      ∂f_G/∂gamma =  g * sin(gamma) / V
+
+    Evaluated at (V*, gamma*), with the homework constants (this spec,
+    verified against a centred finite-difference Jacobian to ~1e-8):
+
+      J = [[ -0.985541970605702 , -9.64266066331038  ],
+           [  1.53081998978802  , -0.492770985302851 ]]
+
+    Eigenvalues (numpy.linalg.eigvals, this spec):
+
+      lambda = -0.739156477954277 ± 3.83411944090805 j
+
+    Hence
+      sigma = -0.739156477954277   1/s
+      omega =  3.83411944090805    rad/s
+      T_lin = 2 π / omega          = 1.63875575709543 s
+      wn    = sqrt(sigma^2+omega^2)= 3.90471819547209 rad/s
+      zeta  = -sigma / wn          = 0.18929829015866
+      amplitude ratio per period   = exp(sigma * T_lin) = 0.297810788027281
+
+    Checks: trace(J) = 2 sigma, det(J) = wn^2 (verified).
+    f(V*, gamma*) = 0 to ~1e-16 (verified).
+
+    Closed form: δx(t) = expm(J t) @ δx0,   δx0 = [V0 - V*, gamma0 - gamma*].
+    Use scipy.linalg.expm (or the real 2×2 form with e^{σt}[cos ωt I +
+    sin(ωt) (J - σ I)/ω]). Then V_lin = V* + δV, gamma_lin = gamma* + δγ.
+
+    Hybrid kinematics (USE THIS for the overlay path):
+      integrate hdot = V_lin sin(gamma_lin), rdot = V_lin cos(gamma_lin)
+      from (h, r) = (H0, 0). This keeps the linear dynamics and the exact
+      geometry of the path.
+    Fully linearized kinematics (optional, docs only):
+      hdot ≈ V* sin γ* + sin(γ*) δV + V* cos(γ*) δγ
+      rdot ≈ V* cos γ* + cos(γ*) δV - V* sin(γ*) δγ
+
+    This spec compared hybrid linear vs nonlinear over 6 s:
+      case a: max errors ≈ 0 (they share the equilibrium)
+      case b (δγ0 = +10.28 deg, δV = 0):
+          max |ΔV| = 0.012 m/s, |Δγ| = 0.48 deg, |Δh| = 0.0075 m
+          (the linear model is excellent here)
+      case c (δV = 1.775 m/s):
+          max |ΔV| = 0.204 m/s, |Δγ| = 7.20 deg, |Δh| = 0.107 m
+      case d (δV = 7.099 m/s):
+          max |Δγ| ≈ 410 deg — the linear model does NOT loop.
+    Nonlinear V-peak spacing (this spec, RK23):
+      case b periods 1.641 s, 1.639 s (mean 1.640 s)
+      case c periods 1.645 s, 1.641 s (mean 1.643 s)
+    These confirm T_lin = 1.639 s.
+
+4.10 Lanchester approximation (docs and Phugoid panel, as a comparison)
+    Classical constant-alpha, small-disturbance, drag-free period, and
+    the powered-level-flight damping estimate (MIT Unified Engineering):
+
+      T_Lanch = π * sqrt(2) * V* / g = 1.60912644463448 s
+      zeta_Lanch = 1 / (sqrt(2) * LD_max) = 0.128258047464256
+
+    T_Lanch is within ~2 % of T_lin and of the nonlinear peak spacing.
+    zeta_Lanch under-predicts damping (0.128 vs 0.189) because the
+    airplane is in a glide, not level powered flight; say so on the panel.
+
+    Book / webpage rounding (NOT a bug — document it):
+      Stengel's prose quotes rounded figures α ≈ 9.3°, L/D ≈ 5.2,
+      V ≈ 3.7 m/s, period ≈ 1.7 s. The MATLAB (and this project) give
+      α* = 9.767°, L/D = 5.513, V* = 3.549 m/s, T_lin = 1.639 s.
+      Using V = 3.7 m/s in Lanchester's formula yields T = 1.677 s,
+      which is the "about 1.7 s" in the book. If a professor asks about
+      1.7 s, that is the source.
+
+4.11 Why case d loops
+    q_dyn scales as V^2, so at 3 V* the dynamic pressure (and the lift,
+    CL being fixed) is 9 times the equilibrium lift. gammadot is large
+    and positive. In the integration, gamma reaches π (inverted) at
+    t ≈ 0.595 s (r ≈ 0.71 m, h ≈ 4.423 m, V ≈ 3.19 m/s) and 2π
+    (upright after one loop) at t ≈ 1.432 s (r ≈ 1.89 m, h ≈ 1.85 m,
+    V ≈ 5.52 m/s). Maximum gamma ≈ 6.7835 rad ≈ 388.7 deg
+    (numerical_checks.txt: 6.783534181827585). After the loop, drag
+    bleeds the extra energy and the motion decays toward (V*, gamma*).
+
+4.12 Professor cases — initial conditions
+    All start at h = 2 m, r = 0, t in [0, 6] for Reference.
+      a:  x0 = [V*,      gamma*,  2, 0]
+      b:  x0 = [V*,      0,       2, 0]
+      c:  x0 = [1.5 V*,  0,       2, 0]
+      d:  x0 = [3 V*,    0,       2, 0]
+
+
+------------------------------------------------------------------------------------------
+5. ASSUMPTIONS AND LIMITATIONS (put in README, docs/theory.md, and a HUD line)
+------------------------------------------------------------------------------------------
+  1. Point mass in the vertical plane. No lateral motion, no roll, no yaw.
+  2. Angle of attack is locked at alpha_star. There is no short-period mode,
+     no pitch inertia, and no stall. The drawn pitch is kinematic:
+     theta = alpha_star + gamma.
+  3. CL and CD are constant (the (L/D)max point). They do not vary with
+     alpha, Reynolds number, or time.
+  4. Atmosphere is constant rho = 1.225 kg/m^3. No wind.
+  5. The professor's Reference integration has no ground event: h may go
+     negative. That is deliberate reproduction, not a bug. Physical mode
+     stops at h = 0.
+  6. Two launches with identical (V0, gamma0) produce identical trajectories
+     (the ODE is deterministic). Real paper airplanes scatter because the
+     hand cannot repeat theta0 and q0 and because low-Re flow is unsteady.
+     Monte Carlo scatter on (V0, gamma0) is an ASSUMPTION that illustrates
+     this, not a measured dataset.
+  7. The dart sprite is larger than the true mean chord (Section 7.2).
+     Label "SPRITE NOT TO SCALE ×N". The scale bar is the length reference.
+  8. Low Reynolds number (Re ~ 3.4e4 at V*). CD0 = 0.02 may be optimistic.
+     Document, do not "correct" it.
+  9. Stengel notes that a real paper wing may buckle above ~5 m/s. Case d
+     at 3 V* ≈ 10.65 m/s is a numerical demonstration of the equations.
+ 10. Rigid-body parameters (Iy, Cm, a pitching-moment arm) are NOT in the
+     homework. Do not invent them. See Section 17.
+
+------------------------------------------------------------------------------------------
+6. NUMERICAL METHOD
+------------------------------------------------------------------------------------------
+  - Integrator: scipy.integrate.solve_ivp, method="RK23"
+    (Bogacki–Shampine 2(3) pair; SciPy documents this as the counterpart
+    of MATLAB ode23, which the professor used).
+  - Reference validation runs (must match Section 12):
+        rtol = 1e-8, atol = 1e-10, dense_output = True
+        do NOT set max_step (leave the default) so results line up with
+        numerical_checks.txt / the render.py that produced it.
+  - Interactive playback: PRECOMPUTE the whole trajectory at Launch with
+    the settings above (Physical adds the h = 0 terminal event), then
+    interpolate with sol.sol(t) or an equivalent dense sample (~200 Hz
+    stored table). Do not re-integrate every frame.
+    Playback: t_sim += CONFIG speed_factor * dt_wall, clamped to [0, t_final].
+  - Preview (pre-launch, every slider change): the same solver. Cheap
+    enough to recompute live; debounce only if a frame budget requires it.
+  - Heatmap / Monte Carlo: rtol=1e-6, atol=1e-8, max_step=0.05 is allowed
+    for speed. Physical event still required.
+  - float64 everywhere in physics.
+  - Event h = 0, direction = -1, terminal = True in Physical mode.
+  - V guard: Section 4.6.
+  - Time array for exported Figure 2: np.linspace(0, 6, 2401) is fine
+    (0.0025 s spacing; matches the reference render.py sampling).
+
+------------------------------------------------------------------------------------------
+7. CAMERA AND VISUAL DESIGN
+------------------------------------------------------------------------------------------
+7.1 Window and layout
+    Window: 1280 x 720 px (CONFIG, windowed, not fullscreen by default).
+    Caption: "Paper Airplane Flight Lab".
+    Title / splash (shown briefly on startup, or as the pre-launch header):
+      Paper Airplane Flight Lab
+      Developed by Sahand Ranjbaripour, Flight Dynamics course project
+      under Prof. Amiri Atashgah, University of Tehran
+    The splash credit may be one smaller line under the title.
+
+    The world view uses the FULL 1280 x 720. Controls and telemetry sit
+    on SEMI-TRANSPARENT dark panels over the dusk gradient so the HUD
+    stays readable (do not carve the world down into a tiny letterboxed
+    viewport — the composed target is docs/images/scene_preview.jpg,
+    copied from the provided scene_preview.jpg).
+
+    Suggested overlay layout (CONFIG, keep readable on orange AND blue):
+      - Left dock ~300 px wide, panel rgba (12, 16, 28, 210): sliders,
+        presets A–D, mode, LAUNCH, RESET, RESTART, playback speed.
+      - Right / top-right telemetry ~260 px, same panel style.
+      - Bottom-right footer, always visible, small and subtle
+        (rgba text ~180 alpha, 12 px):
+          "Paper Airplane Flight Lab | S. Ranjbaripour"
+      - Trail legend: top-centre or under the left dock, one row per run.
+      - Scale bar + "SPRITE NOT TO SCALE ×N" above the ground line,
+        lower-left of the open sky (not buried under the left dock).
+      - Minimap 180 x 90 px, upper-right under telemetry: the wide world
+        box r ∈ [−2.5, 23] m, h ∈ [−2.5, 5.5] m, all trails, a rectangle
+        for the current view, and a dot for the airplane.
+
+    Fonts (cross-platform fallbacks):
+      HUD numbers: Consolas, DejaVu Sans Mono, Menlo, monospace
+      Labels: Segoe UI, DejaVu Sans, Helvetica, sans-serif
+
+7.2 Camera — LOCKED zoom matching scene_preview.jpg
+    Sahand's visual target is the composed preview (measured in this spec
+    from /workspace/paper_airplane/assets/scene_preview.jpg, 1280x720):
+
+      - Ground horizon at y = 548 px  (548/720 = 0.7611 ≈ 76 %).
+        The background file dusk_field.jpg has the same cut: the largest
+        luma drop is after row 547, so the dark ground strip begins at
+        row 548.
+      - Launcher left edge at x ≈ 100–103 px (7.8–8.1 % from the left).
+        Use CONFIG prelaunch_launcher_x_frac = 0.08.
+      - Airplane in the preview is 107–109 px nose-to-tail (bbox width
+        while nearly level). Draw the sprite at
+        CONFIG sprite_display_length_px = 110.
+
+    World scale, chosen so the ramp top (h = 2 m) sits at the preview's
+    launcher-top (y = 381) when the ground is at y = 548:
+
+      ppm = (548 - 381) / 2.0 = 83.5 px/m     # CONFIG pixels_per_metre
+
+    Isotropic: the same ppm in r and h, so a loop is a loop, not an oval.
+
+    Consequences (this spec's arithmetic):
+      visible width           = 1280 / 83.5 ≈ 15.33 m
+      visible sky above h = 0 = 548 / 83.5 ≈ 6.56 m
+      visible ground below    = 172 / 83.5 ≈ 2.06 m
+      2 m of height           = 167 px
+      sprite drawn length     = 110 px = 110/83.5 ≈ 1.317 m
+      true mean chord c       = 0.140596734885506 m
+      magnification N         = 1.317 / 0.140597 ≈ 9.37
+        Display N computed live:
+          N = (sprite_display_length_px / ppm) / c_mean
+        Label: "SPRITE NOT TO SCALE ×9.4" (one decimal).
+      A true-scale dart at this zoom would be only
+          c * ppm ≈ 11.7 px long  (span b * ppm ≈ 10.1 px)
+        which is why the sprite is enlarged. A 0.121 m span over the
+        20.95 m Reference case-a track is 0.58 % of that path — at a
+        hypothetical wide shot of 25 m the dart would be ~5 px and
+        unreadable. The follow-and-enlarge choice is deliberate.
+
+    Why this distance (the research the owner asked for):
+      Reference extents over 6 s (RK23, this spec / numerical_checks):
+        r ∈ [−0.000098, 20.954313] m
+        h ∈ [−1.800783,  4.422790] m     (case d loop apex 4.4228 m)
+      Physical slider box V0 ∈ [1, 12] m/s, gamma0 ∈ [−40, +50] deg
+      (437-point survey in this spec):
+        landing r ∈ [6.00, 16.00] m, landing t ∈ [1.96, 5.56] s
+        h_max ≈ 4.494 m (V0=12, gamma0≈5 deg)
+        most-negative in-flight r ≈ −1.815 m (V0=12, gamma0=50 deg,
+        a lofted throw that loops backward before going downrange)
+        heatmap peak ≈ 16.003 m near V0 ≈ 9.4 m/s, gamma0 ≈ −8 deg
+      At 83.5 px/m the case-d apex (h = 4.423 m) lands at screen
+        y = 548 − 4.423*83.5 ≈ 179 px — still inside the window.
+      Case a at t = 6 s (h = −1.801 m) lands at
+        y = 548 + 1.801*83.5 ≈ 698 px — 22 px above the bottom edge.
+      So the professor cases and the recommended sliders FIT vertically
+      in the preview framing. The 21 m of Reference range does NOT fit
+      horizontally (visible width 15.3 m); the camera therefore follows
+      the airplane in r, and the persistent trail plus the minimap show
+      the whole path.
+
+    Camera behaviour (one mode, not a user-toggled wide/follow pair):
+
+      ZOOM          locked at ppm = 83.5 px/m. Never change it in play.
+      SPRITE SIZE   locked at 110 px nose-to-tail. Never scale with zoom
+                    (there is no zoom change).
+      PRE-LAUNCH    place world (r = 0, h = 0) so the ground line is at
+                    screen y = 548 and the launcher (r = 0) is at screen
+                    x = 0.08 * 1280 ≈ 102 px. No follow.
+      IN FLIGHT     same ppm, same ground-lock (h = 0 at y = 548) as long
+                    as the sprite CG stays inside the screen with a
+                    CONFIG margin_px = 40 px.
+                    Horizontal follow: set the camera origin so the
+                    airplane CG sits at CONFIG follow_x_frac = 0.32
+                    (~410 px, close to the preview's flying dart at
+                    x ≈ 439). This leaves trail behind and sky ahead.
+                    Vertical follow ONLY if the CG would pass within
+                    margin_px of the top or bottom (the case-d loop at
+                    this zoom actually stays on screen; vertical follow
+                    is a safety net for unusual sliders, and a 40 px
+                    cushion near h = −1.80 in Reference). When the
+                    airplane returns to the default band, ease the
+                    vertical origin back so h = 0 returns to y = 548.
+      SMOOTHING     You may low-pass the camera origin only
+                    (CONFIG camera_tau_s = 0.12 s, or 0 for a hard lock).
+                    NEVER smooth theta, V, gamma, h, r, energy, or the
+                    sprite rotation. Physics data and the nose angle are
+                    instantaneous every frame.
+      SCALE BAR     always on: a 2 m bar (2 * 83.5 = 167 px) labelled "2 m",
+                    plus the not-to-scale caption.
+
+    World-to-screen (y down):
+      x_s = cam_x + r * ppm
+      y_s = cam_y - h * ppm
+    with (cam_x, cam_y) chosen to satisfy the rules above.
+
+7.3 Art assets — copy these files into the NEW repo
+    Source files on the shared workstation, and the repo paths to write:
+
+      FROM  /workspace/paper_airplane/assets/paper_dart_sprite.png
+      TO    assets/aircraft/paper_dart.png
+            949 x 249 RGBA, transparent background, nose pointing RIGHT,
+            nose tip at the right edge, tail at the left. File is 132 KB.
+
+      FROM  /workspace/paper_airplane/assets/background/dusk_field.jpg
+      TO    assets/background/dusk_field.jpg
+            1280 x 720 RGB. Flat dusk sky (deep blue at the top through
+            violet to orange at the horizon) and a dark ground strip
+            whose top edge is at y = 548 (measured). File is 102 KB.
+
+      FROM  /workspace/paper_airplane/assets/launcher/catapult.png
+      TO    assets/launcher/catapult.png
+            330 x 279 RGBA. Rubber-band catapult: cylindrical pillar,
+            slotted ramp painted at a fixed tilt, band arm on the left
+            with a ring. Grey metal with cyan hinge accents. File is 64 KB.
+
+      FROM  /workspace/paper_airplane/assets/scene_preview.jpg
+      TO    docs/images/scene_preview.jpg
+            1280 x 720 composed preview (dusk + launcher + dart). This
+            is the visual QA target, not a runtime atlas.
+
+    If the owner drops this spec into Cursor without those paths, look
+    for the same filenames next to the spec or ask for them. Do not
+    download random airplanes from the internet.
+
+    Attribution (assets/ATTRIBUTION.md, required):
+      All three runtime images (paper_dart.png, dusk_field.jpg,
+      catapult.png) and the composed preview are AI-generated images
+      made for this project. They are not photographs of a real
+      aircraft, field, or launcher. Credit the project author
+      Sahand Ranjbaripour as the commissioner; do not invent a studio
+      name or a stock-photo source.
+
+7.4 Airplane sprite — rotation, CG, no lag
+    Load assets/aircraft/paper_dart.png.
+    At load time, estimate the rotation pivot as the ALPHA-MASK
+    CENTROID of pixels with alpha > 16, and document the measured
+    values in docs/validation.md. This spec measured:
+
+      centroid = (387.78, 119.31) px on the 949 x 249 image
+                 (40.9 % from the tail / left, 47.9 % from the top)
+      CONFIG default cg_px = (388, 119)   # rounded; override if needed
+
+    Scale the image first so its nose-to-tail width equals
+    sprite_display_length_px (110), preserving aspect
+    (drawn height ≈ 110 * 249/949 ≈ 28.9 px). Scale the CG with it:
+      cg_scaled = cg_px * (drawn_w / 949, drawn_h / 249)
+
+    Then rotate about that CG — not about the image centre — by
+
+      theta = alpha_star + gamma          # radians, 0 = nose right
+      angle_deg = degrees(theta)          # pygame.transform.rotate, CCW
+
+    Screen y increases downward. pygame.transform.rotate(surf, angle_deg)
+    rotates counter-clockwise in screen space, which raises the nose
+    (toward smaller y) when the nose starts pointing right. Pass
+    +degrees(theta); do NOT negate.
+
+    Implement a pygame-free helper (src/paper_airplane/sprite_geometry.py)
+    equivalent in spirit to the Cessna rotate_offset / pivoted_center
+    (a vector (1, 0) at positive theta must move toward smaller y).
+    Unit-test, without opening a window:
+      theta = 0     -> nose is to the RIGHT of the CG
+      theta = +90°  -> nose is ABOVE the CG (smaller screen y)
+      theta = −90°  -> nose is BELOW the CG
+      the CG screen position does not wander with theta
+    FORBIDDEN: any smooth_display_angle, lerp, or filter on theta.
+    Draw the instantaneous theta every frame.
+
+    Fallback if paper_dart.png is missing: a procedurally drawn clean
+    dart silhouette (white filled polygon, pointed nose right, simple
+    tail), same CG convention, same rotation tests. Log a one-line
+    warning. Do not crash.
+
+7.5 Launcher — split the PNG so the ramp follows gamma0
+    The ramp in catapult.png is painted at a FIXED tilt. Measured from
+    the top edge between x ≈ 270 and x ≈ 315 (Δy = −13 px, Δx = 45 px):
+
+      gamma_painted ≈ arctan(13/45) ≈ 16.1 deg nose-up
+      CONFIG launcher_rest_gamma_deg = 16.1
+
+    That angle is an ART rest pose, not a physical input. The pillar
+    must stay upright while the ramp (and the band arm, which is built
+    onto the ramp) rotate live to the current gamma0.
+
+    How to split (CONFIG, refine visually against the preview):
+      The PNG becomes pillar-only at row y = 124 (from there down,
+      opaque pixels are x = 161..237, the shaft, later flaring into
+      the base). Recommended crops on the 330 x 279 image:
+        pillar_crop        = (130, 124, 140, 155)   # x, y, w, h
+                             covers the shaft and the wider base
+                             (base reaches roughly x = 131..268)
+        ramp_assembly_crop = (0, 0, 330, 128)       # ramp + band arm
+      Pivot in PNG coordinates: the centre of the pillar top,
+        launcher_pivot_px ≈ (199, 124)
+        (shaft centre (161+237)/2 = 199, on the split line).
+      Refine the pivot so that at gamma0 = gamma_painted the cropped
+      ramp sits naturally on the cap, with no gap and no collision
+      into the pillar.
+
+    Drawing:
+      - Scale the assembled launcher so the WORLD distance from the
+        pillar base (h = 0) to the ramp TOP seating line (h = H0 = 2 m)
+        is exactly 2 m (167 px at 83.5 px/m). This is the constraint
+        that sets the launcher blit scale. The seating point is the
+        launch point (r, h) = (0, 2).
+      - Blit the pillar statically, base on the ground, axis near r = 0.
+      - Blit the ramp assembly rotated by (gamma0 − gamma_painted)
+        about the pivot (same CCW-positive, y-down helper as the dart).
+      - Seat the airplane on the ramp at (0, 2) with
+        theta0 = alpha_star + gamma0. The ramp is the velocity direction;
+        the body sits alpha_star above it. Draw the small alpha arc.
+      - After launch the launcher stays in the world (it will scroll
+        left as the camera follows the dart).
+
+    Fallback if catapult.png is missing (or if a clean crop proves
+    ugly): draw a simple grey pedestal (static) and a rectangular
+    slotted ramp in matching grey/cyan, rotated to gamma0, with the
+    ramp top at h = 2 m. Log a warning; do not crash.
+
+7.6 Background
+    Blit assets/background/dusk_field.jpg as follows:
+
+      SKY (rows 0..547 of the file): a horizontally uniform vertical
+      gradient. Draw it in SCREEN space, full window, fixed — it does
+      not scroll horizontally (the sky is "at infinity"). If the window
+      matches 1280x720 you can blit rows 0:548 at (0, 0) 1:1.
+
+      GROUND (rows 548..719): a dark strip. Fill every screen pixel
+      whose world h is below 0 with a horizontally scrolling sample of
+      this strip, keyed to camera r, so the ground moves with the world.
+      Tile if the camera pans far.
+
+      GROUND LINE at the current screen y of h = 0 (y = 548 in the
+      default framing). Overlay procedural ticks every 1 m and labels
+      every 5 m, in world coordinates (they scroll). Tick colour a
+      readable light-on-dark (~#C9D2C8 at ~160 alpha).
+
+      NEGATIVE-h REGION (Reference): a subtle hatch over h < 0 and a
+      short amber caption (Section 3.2). Trails with h < 0 are dashed.
+
+    If dusk_field.jpg is missing: procedural dusk gradient (deep
+    #0B2A6B at the top through #E07A3A near the horizon) and a dark
+    #1A2A24 ground strip occupying the bottom 24 % of the window.
+    Same tick overlay.
+
+    When the camera pans vertically, the ground line moves with h = 0;
+    the sky gradient may stay screen-fixed (it is a backdrop). World
+    objects (launcher, dart, trails, ticks) always use world_to_screen.
+
+7.7 Trails
+    Like the Cessna project: each flight appends (r, h) samples to a
+    polyline stored in WORLD coordinates. The line persists after the
+    run and is only cleared by RESET (Section 3.1). RESTART keeps every
+    previous polyline.
+
+    Colour cycle (first four match the reference matplotlib figure in
+    render.py, then continue with distinct hues):
+      1 #0072BD   2 #D95319   3 #EDB120   4 #7E2F8E
+      5 #77AC30   6 #4DBEEE   7 #A2142F   8 #D07C7C
+      then wrap. Each new Launch after a RESTART (or the first Launch
+    of a session) takes the next colour and will receive a legend
+    entry (Section 3.3) once the run finishes (show V0 and gamma0
+    immediately; fill in range at the end).
+
+    Draw trails under the airplane, 2 px wide, antialiased if cheap.
+    The active run's trail grows as t_sim advances.
+
+7.8 Telemetry (updated every frame from the true state; no filtering)
+      t [s]
+      V [m/s] and V / V*
+      gamma [deg]
+      theta [deg] = alpha_star + gamma
+      alpha [deg]   (constant; still show it)
+      h [m], r [m]
+      q_dyn [Pa]
+      L/D   (constant LD_max; still show it)
+      KE, PE, E [J]
+    Small grey line: "point-mass: alpha fixed, no pitch inertia".
+    In Physical mode after landing: "range = … m,  flight time = … s".
+
+7.9 Colours (dark flight-test tool, readable on dusk)
+      panel fill        rgba(12, 16, 28, 210)
+      panel text        #E8EDF5
+      dim text          #9AA6B2
+      accent / buttons  #4C9BE8
+      warning           #E85D4C
+      OK / Physical     #5DBE7E
+      preview dash      #C5D0DC
+      KE curve          #E2B144
+      PE curve          #4C9BE8
+      total energy      #E8E4D9
+      ground ticks      #C9D2C8
+    Do not put thin yellow or orange HUD text on the orange horizon
+    without a dark panel behind it.
+
+------------------------------------------------------------------------------------------
+8. PLOTS AND EXPORT (matplotlib)
+------------------------------------------------------------------------------------------
+    Figure 1 (professor): h vs r for cases a–d, colours and labels
+      "a: Equilibrium glide", "b: Horizontal launch, V",
+      "c: Horizontal launch, 1.5V", "d: Horizontal launch, 3V"
+      as in render.py. Axes: "Range, m", "Height, m", grid on.
+    Figure 2 (professor): 2x2 of V(t), gamma(t) [rad], h(t), r(t)
+      over 0..6 s for a–d. Same colours. Axis labels as the MATLAB
+      ("Velocity, m/s", "Flight Path Angle, rad", "Altitude, m",
+      "Range, m").
+    Figure 3 (energy): KE, PE, total vs t for the current run.
+    Figure 4 (phugoid, when that mode ran): nonlinear vs linear V, gamma
+      (and the hybrid (r, h) overlay) plus a text box with lambda, T, zeta.
+    Figure 5 (heatmap) and Figure 6 (Monte Carlo histogram) when those
+    modes ran.
+
+    Every exported figure carries a small footnote (8–9 pt, bottom):
+      "Paper Airplane Flight Lab — S. Ranjbaripour, University of Tehran.
+       Model: Stengel, Flight Dynamics (2005), Example 1.3-1."
+    Do not list Prof. Amiri Atashgah as an author on the figures.
+    A short acknowledgment "Course project under Prof. Amiri Atashgah"
+    may appear in the README and About panel only (Section 16).
+
+    Export directory: outputs/run_YYYYMMDD_HHMMSS/ (gitignore this).
+    Also write run.csv with columns
+      t, V, gamma_rad, gamma_deg, theta_deg, alpha_deg, h, r,
+      q_dyn, L_over_D, KE, PE, E
+    and a one-row meta.txt with V0, gamma0, mode, range, t_final.
+
+    CLI:
+      python -m paper_airplane                     # GUI
+      python -m paper_airplane --reference-plots   # Figures 1–2 to outputs/
+      python -m paper_airplane --heatmap           # heatmap PNG to outputs/
+
+------------------------------------------------------------------------------------------
+9. CONTROLS
+------------------------------------------------------------------------------------------
+    Pre-launch / home
+      Left / Right or A / D     gamma0
+      Up / Down or W / S        V0
+      Mouse                     sliders
+      1 / 2 / 3 / 4             presets A, B, C, D
+      Tab                       cycle mode
+      Space or Enter            LAUNCH
+      R                         RESET  (clear trails + legend, back to rail)
+      T                         RESTART (back to rail, KEEP trails)
+      H                         Drop A–D Reference trails (adds four
+                                coloured paths + legend rows, no playback)
+      P                         show plots of the last run / of A–D
+      E                         export last run
+      A                         About panel (Section 16)  — close with A or Esc
+      Esc                       close About if open; otherwise quit prompt
+      - / =  or  [ / ]          playback speed 0.25× / 1× / 4× (applies
+                                to the next or current flight)
+
+    During flight
+      - / =  or  [ / ]          live playback speed
+      Esc                       abort run, keep the partial trail, go to
+                                the finished-run state (RESTART/RESET live)
+
+    After a run (airplane frozen or results strip visible)
+      R                         RESET
+      T                         RESTART
+      Space                     LAUNCH again (same as RESTART + LAUNCH
+                                if you prefer; pick one and document it:
+                                recommended = Space launches from the
+                                current sliders WITHOUT clearing trails,
+                                equivalent to RESTART then LAUNCH)
+      P / E / H / A             as above
+
+    Button labels on the left dock must say RESET and RESTART explicitly,
+    with a one-line hint:
+      "RESET clears trails. RESTART flies again and keeps them."
+
+------------------------------------------------------------------------------------------
+10. FOLDER STRUCTURE
+------------------------------------------------------------------------------------------
+    paper-airplane-flight-lab/          # NEW repo root (git init here)
+      README.md
+      LICENSE                           # MIT, copyright Sahand Ranjbaripour
+      CITATION.cff                      # author: Sahand Ranjbaripour
+      PROJECT_SPEC.txt                  # this file
+      pyproject.toml
+      .gitignore
+      main.py                           # delegates to paper_airplane.__main__
+      src/paper_airplane/
+          __init__.py
+          __main__.py
+          config.py
+          aero.py                       # CLa, epsilon, CL*, CD, LD, geometry
+          equilibrium.py                # V*, gamma*, alpha*
+          dynamics.py                   # RHS, V guard   (NO pygame)
+          linearize.py                  # J, eigenvalues, expm solution
+          energy.py                     # KE, PE, E
+          simulation.py                 # solve_ivp wrappers, cases, MC, heatmap
+          plots.py                      # figures, footnotes, export
+          sprite_geometry.py            # CG rotation math, NO pygame
+          app/
+              __init__.py
+              main.py                   # window, loop, splash, About
+              theme.py
+              camera.py
+              background.py
+              launcher.py               # split blit + fallback
+              sprite.py                 # load dart + fallback silhouette
+              prelaunch.py
+              flight.py
+              trails.py
+              dashboard.py
+              about.py
+              results.py
+      assets/
+          ATTRIBUTION.md
+          aircraft/paper_dart.png
+          background/dusk_field.jpg
+          launcher/catapult.png
+      docs/
+          theory.md
+          validation.md
+          images/                       # README GIF, screenshots,
+                                        # scene_preview.jpg
+      tests/
+          test_aero.py
+          test_equilibrium.py
+          test_dynamics.py
+          test_linearize.py
+          test_energy.py
+          test_simulation.py
+          test_sprite_geometry.py
+          test_plots.py
+      outputs/                          # gitignored, created at runtime
+
+    No other files in the repo root. No leftover "doc", no screenshots
+    named sand-save-*.png, no .DS_Store (gitignore it).
+
+------------------------------------------------------------------------------------------
+11. MODULE RESPONSIBILITIES AND TECH STACK
+------------------------------------------------------------------------------------------
+    aero.py          PI_HOMEWORK, CLa, epsilon, CL_star, CD_star, LD_max,
+                     span b, c_mean. Pure functions, no I/O.
+    equilibrium.py   gamma_star, V_star, alpha_star, both V formulas.
+    dynamics.py      rhs(t, x) -> [Vdot, gammadot, hdot, rdot]; V guard.
+    linearize.py     jacobian(V, gamma), jacobian_at_eq(), eigenvalues,
+                     linear_vg(t, dV0, dgamma0), hybrid path (r, h).
+    energy.py        ke, pe, total, drag_power.
+    simulation.py    integrate_reference(...), integrate_physical(...),
+                     cases_abcd(), preview(...), monte_carlo(...),
+                     range_heatmap(...). Returns a Trajectory dataclass
+                     (t, V, gamma, h, r, and derived theta, q_dyn, energies).
+    plots.py         figure1_path, figure2_histories, energy, phugoid,
+                     heatmap, histogram; apply the figure footnote.
+    sprite_geometry.py   rotate_offset, pivoted_center (tested).
+    app/*            pygame-ce only. Imports physics, never the reverse.
+
+    Python >= 3.10
+    dependencies: numpy, scipy, pygame-ce, matplotlib
+    dev: pytest
+    pyproject.toml: setuptools src-layout, script paper-airplane =
+    paper_airplane.__main__:main, pytest pythonpath = ["src"].
+
+    pyproject authors field:
+      {name = "Sahand Ranjbaripour"}
+    Do not list Prof. Amiri Atashgah as a package author.
+
+------------------------------------------------------------------------------------------
+12. TESTS AND ACCEPTANCE CRITERIA
+------------------------------------------------------------------------------------------
+    Use PI_HOMEWORK = 3.141592. Compare against numerical_checks.txt
+    (produced by render.py with the same formulas) and this spec's own
+    RK23 runs. Every expected number below is from those sources, not
+    invented.
+
+12.1 Aerodynamics and equilibrium  (atol 1e-12 relative to the table)
+      CLa         = 1.29362167202          /rad     numerical_checks.txt
+      epsilon     = 0.411253168484                  numerical_checks.txt
+      CL_star     = 0.220526289045                  numerical_checks.txt
+      CD_star     = 0.04           exactly
+      LD_max      = 5.51315722613                   numerical_checks.txt
+      V_star      = 3.54937084252  m/s              numerical_checks.txt
+      gamma_star  = -0.179433441299 rad
+                  = -10.2807788899 deg              numerical_checks.txt
+      alpha_star  = 0.170472011883 rad
+                  = 9.76732680598 deg               numerical_checks.txt
+    Also assert CD_star == 2*CD0 and the two V* formulas agree to 1e-15.
+
+12.2 Geometry
+      b      = sqrt(AR*S) ≈ 0.120913192001535 m
+      c_mean = S/b        ≈ 0.140596734885506 m     (this spec)
+
+12.3 Stationary case a (Reference, 0..6 s, rtol=1e-8, atol=1e-10)
+      max |V(t) − V*|      < 1e-10
+      max |gamma(t) − γ*|  < 1e-12
+    Final state at t = 6 (numerical_checks.txt / this spec):
+      a: V=3.54937084  gamma=-0.17943344  h=-1.80078285  r=20.95431343
+      b: V=3.55406177  gamma=-0.180656    h=-1.75113483  r=20.82484652
+      c: V=3.54499023  gamma=-0.18894738  h=-1.13747005  r=20.56742542
+      d: V=3.59308599  gamma= 6.07663869  h=-0.33072098  r=17.36450918
+    Accept finals within atol 5e-6 (absolute) on each component.
+    Additional:
+      case d: max(gamma) > 2π          (it loops)
+      case d: max(h) ≈ 4.42279 m       (atol 1e-3)
+      min V in {a,b,c,d} > 2.0 m/s     (d's min V ≈ 2.09945)
+
+12.4 Physical landings (event h=0, direction −1; this spec, RK23
+     rtol=1e-10, atol=1e-12 — allow atol 5e-4 on t and r because
+     event detection is slightly solver-dependent)
+      a: t=3.15724430361 s, r=11.02631445225 m
+         and r == H0 * LD_max, t == -H0/(V* sin(γ*)) to 1e-8
+      b: t≈3.224730 s, r≈11.142685 m
+      c: t≈4.241136 s, r≈14.419941 m, h_max≈2.647747 m
+      d: t≈5.549812 s, r≈15.813362 m, h_max≈4.422791 m
+    After the event, reported h is 0 (clamp numerical overshoot).
+
+12.5 Linearization
+      J at equilibrium matches Section 4.9 to atol 1e-9
+      eigenvalues  -0.73915648 ± 3.83411944 j   (real/imag atol 1e-7)
+      T_lin ≈ 1.638756 s, zeta ≈ 0.189298
+      Lanchester T = π sqrt(2) V*/g ≈ 1.609126 s
+      f(V*, γ*) ≈ 0 to 1e-14
+      case b hybrid |Δh| over 6 s < 0.02 m
+      case d linear path does NOT satisfy max(gamma_lin) > 2π
+
+12.6 Energy
+      case a, 0..6 s: |ΔE + ∫ D V dt| < 1e-10
+
+12.7 Sprite geometry
+      The three orientation tests in Section 7.4.
+      No function in the physics or sprite_geometry modules named
+      or behaving like smooth_display_angle.
+
+12.8 UI / scenario acceptance (manual checklist in docs/validation.md,
+     plus automated tests where easy)
+      - Pre-launch: moving the gamma0 slider rotates the RAMP to gamma0
+        and the DART to alpha_star+gamma0; the dashed preview updates.
+      - Presets A–D snap sliders to the professor ICs.
+      - LAUNCH plays the trajectory in sim-time with 0.25/1/4× speeds.
+      - Each flight leaves a persistent coloured world-coordinate trail.
+      - RESTART returns the dart to the rail and KEEPS trails; the next
+        launch uses the next colour and a new legend row with V0, gamma0
+        and range (or r(6 s) in Reference).
+      - RESET clears all trails and legend entries and returns the dart
+        to the rail.
+      - Reference trails go dashed below h = 0 with the caption present.
+      - Camera: pre-launch launcher near 8 % from the left, ground near
+        76 % of the window height, dart ≈ 110 px long; zoom does not
+        change in flight; camera follows horizontally; a 2 m scale bar
+        and "SPRITE NOT TO SCALE ×N" are visible.
+      - Footer "Paper Airplane Flight Lab | S. Ranjbaripour" is visible.
+      - Key A opens the About panel with the credits in Section 16.
+      - Missing any one art file still runs, using the documented fallback.
+
+------------------------------------------------------------------------------------------
+13. DOCUMENTATION
+------------------------------------------------------------------------------------------
+    README.md (English)
+      Title: Paper Airplane Flight Lab
+      Immediately under the title, one line:
+        Developed by Sahand Ranjbaripour, Flight Dynamics course project
+        under Prof. Amiri Atashgah, University of Tehran
+      Then: one-paragraph description, a GIF or screenshot from
+      docs/images/, features, physics summary, install, run, controls,
+      outputs, assumptions, references, asset attribution, author.
+
+      Install MUST be cross-platform:
+
+        python3 -m venv .venv
+        # Linux / macOS:
+        source .venv/bin/activate
+        # Windows (cmd):
+        .venv\\Scripts\\activate
+        # Windows (PowerShell):
+        .venv\\Scripts\\Activate.ps1
+        pip install -e ".[dev]"
+        python -m paper_airplane
+
+      Also mention `python main.py` as an equivalent.
+
+    README sections "Author" and "Acknowledgments" (separate):
+      Author: Sahand Ranjbaripour (https://github.com/sahandrb).
+      Acknowledgments: course project for the Flight Dynamics course
+      at the University of Tehran under Prof. Amiri Atashgah.
+      The flight model follows Robert F. Stengel, Flight Dynamics
+      (Princeton University Press, 2005), Example 1.3-1.
+      Prof. Amiri Atashgah is the course supervisor, NOT a co-author
+      of the software.
+
+    docs/theory.md
+      All of Section 4 (formulas, the V* equivalence proof, the
+      Jacobian derivation, Lanchester vs linear vs nonlinear, the
+      book-vs-code rounding note, limitations). Write it so Sahand
+      can defend it at a whiteboard.
+
+    docs/validation.md
+      The tables in Section 12, the command that produced them,
+      CG pixel measurement, launcher crop/pivot, camera ppm derivation
+      from scene_preview.jpg (167 px / 2 m = 83.5 px/m), and the
+      manual UI checklist.
+
+    assets/ATTRIBUTION.md  — Section 7.3.
+
+    References to list (these were checked while researching; keep the
+    URLs as written):
+      - Stengel, R. F. (2005). Flight Dynamics. Princeton University Press.
+        Example 1.3-1, Paper Airplane Flight Path.
+      - Paper Airplane Simulation:
+        https://stengel.mycpanel.princeton.edu/PaperPlane.html
+      - PaperPlane.m (the professor's code):
+        https://stengel.mycpanel.princeton.edu/PaperPlane.m
+      - MAE 331 Lecture 1:
+        https://stengel.mycpanel.princeton.edu/MAE331Lecture1.pdf
+      - MAE 331 Lecture 3 (Helmbold):
+        https://stengel.mycpanel.princeton.edu/MAE331Lecture3.pdf
+      - MAE 331 Lecture 11 (path equations):
+        https://stengel.mycpanel.princeton.edu/MAE331Lecture11.pdf
+      - Book page:
+        https://stengel.mycpanel.princeton.edu/FlightDynamics.html
+      - Lanchester, F. W. (1908). Aerodonetics.
+        https://archive.org/details/aerodoneticscon02lancgoog
+      - MIT OCW 16.333:
+        https://ocw.mit.edu/courses/16-333-aircraft-stability-and-control-fall-2004/
+      - MIT Unified Engineering phugoid notes:
+        https://ocw.mit.edu/courses/16-01-unified-engineering-i-ii-iii-iv-fall-2005-spring-2006/4e932d24f9d4b17918820220ce1bd11e_phugoid.pdf
+      - SciPy RK23:
+        https://docs.scipy.org/doc/scipy/reference/generated/scipy.integrate.RK23.html
+      - Li, Goodwill, Wang, Ristroph, J. Fluid Mech. (2022):
+        https://www.cambridge.org/core/journals/journal-of-fluid-mechanics/article/centre-of-mass-location-flight-modes-stability-and-dynamic-modelling-of-gliders/D4983A693B836A364D19C95B4D5FFC3B
+      - Ng, Kng, Pey, Skvortsov, AIAA 2009-3958,
+        On the Aerodynamics of Paper Airplanes:
+        https://lactea.ufpr.br/wp-content/uploads/2018/08/On_the_Aerodynamics_of_Paper_Airplanes.pdf
+      - NASA Glenn, three forces on a glider:
+        https://www1.grc.nasa.gov/beginners-guide-to-aeronautics/three-forces-on-a-glider/
+
+------------------------------------------------------------------------------------------
+14. GIT HYGIENE
+------------------------------------------------------------------------------------------
+    .gitignore at least:
+      __pycache__/  *.py[cod]  *.egg-info/  .pytest_cache/  .mypy_cache/
+      .ruff_cache/  .venv/  venv/  dist/  build/  outputs/
+      .idea/  .vscode/  *.log  .DS_Store  Thumbs.db
+      sand-save-*.png
+    Never commit outputs/, editor junk, or screenshots dumped in the root.
+    Conventional commits. Do not `git commit --no-verify` to hide failures.
+
+------------------------------------------------------------------------------------------
+15. BUILD PHASES (small, testable; one phase per request, STOP after each, user commits)
+------------------------------------------------------------------------------------------
+    M1  New directory paper-airplane-flight-lab, git init -b main.
+        Skeleton: pyproject.toml, README (with the credit line), LICENSE
+        (copyright Sahand Ranjbaripour), CITATION.cff, .gitignore,
+        main.py, package stub, this PROJECT_SPEC.txt, copied assets,
+        ATTRIBUTION.md. User makes the first commit. Do not touch the Cessna repo.
+        Owner creates sahandrb/paper-airplane-flight-lab on GitHub
+        manually; add the remote; do not push unless asked.
+    M2  Physics core: aero, equilibrium, dynamics, energy, linearize,
+        simulation + unit tests of Section 12.1–12.6. All green.
+    M3  Headless --reference-plots writes Figure 1 and Figure 2 that
+        visually match paper_airplane_figure1.png / figure2.png
+        (same colours, labels, 0..6 s, negative h visible). Footnote
+        present. --heatmap produces a grid PNG.
+    M4  pygame app shell: 1280x720, dusk background, ground ticks,
+        camera framing (ground at y=548, launcher at 8 %), splash
+        credit, footer, About panel (key A).
+    M5  Split launcher + dart sprite with correct CG rotation (tests
+        12.7). Pre-launch: live V0/gamma0, ramp and dart rotate, dashed
+        preview, presets A–D, alpha arc.
+    M6  Flight playback, persistent trails, RESET / RESTART / legend,
+        telemetry, playback speeds, Reference dashed-below-ground,
+        Physical landing readout. Manual checklist 12.8.
+    M7  Phugoid overlay + energy strip; Monte Carlo; heatmap button.
+    M8  Docs (theory.md, validation.md, README GIF), figure footnotes,
+        CITATION.cff check, final cleanup (no stray root files).
+
+------------------------------------------------------------------------------------------
+16. CREDITS AND BRANDING (do this exactly)
+------------------------------------------------------------------------------------------
+    Author / owner of the software:  Sahand Ranjbaripour
+    GitHub:                          sahandrb
+    Course supervisor (acknowledged, NOT a co-author):
+                                     Prof. Amiri Atashgah
+    Course:                          Flight Dynamics
+    Institution:                     University of Tehran
+    Model source:                    Stengel, Flight Dynamics (2005),
+                                     Example 1.3-1
+
+    Write the supervisor's name exactly as "Prof. Amiri Atashgah".
+    Do not add another first name. Write "University of Tehran" only;
+    do not invent a faculty or department name.
+
+    Required placements:
+      1. README.md — first line under the title, verbatim:
+         "Developed by Sahand Ranjbaripour, Flight Dynamics course project
+          under Prof. Amiri Atashgah, University of Tehran"
+      2. README.md — Author section (Sahand Ranjbaripour, GitHub sahandrb)
+         and a separate Acknowledgments section (supervisor + Stengel).
+      3. Splash / title screen — a small credit line using the same
+         "Developed by…" sentence (it may wrap).
+      4. In-app footer, bottom-right, subtle:
+         "Paper Airplane Flight Lab | S. Ranjbaripour"
+      5. About panel, key A. Full credits:
+           Paper Airplane Flight Lab
+           Developed by Sahand Ranjbaripour
+           GitHub: sahandrb
+           Flight Dynamics course project under Prof. Amiri Atashgah
+           University of Tehran
+           Flight model: Robert F. Stengel, Flight Dynamics (2005),
+           Example 1.3-1.
+           Prof. Amiri Atashgah is the course supervisor, not a
+           co-author of this software.
+         Close with A or Esc.
+      6. LICENSE — MIT, copyright line "Copyright (c) 2026 Sahand Ranjbaripour"
+      7. CITATION.cff — authors: family-names: Ranjbaripour,
+         given-names: Sahand. title: Paper Airplane Flight Lab.
+         Do not add the professor as a cff author.
+      8. pyproject.toml  authors = [{name = "Sahand Ranjbaripour"}]
+      9. Exported-figure footnote: Section 8.
+
+------------------------------------------------------------------------------------------
+17. OPTIONAL FUTURE WORK — RIGID BODY (do NOT implement now)
+------------------------------------------------------------------------------------------
+    A later phase could add pitch dynamics
+        theta,   q = thetadot,
+        Iy * qdot = M = q_dyn * S * c * Cm(alpha, q),
+        alpha = theta - gamma,
+        CL = CL(alpha), CD = CD(alpha).
+    Parameters that would be required, EACH from a cited source,
+    NEVER invented in code:
+
+      Iy          pitch inertia                [kg m^2]
+      c           reference chord              [m]
+                  (a mean chord c = S/b is already derived in Section 4.3
+                  from homework S and AR; do not silently treat that as
+                  a pitching-moment reference length without saying so)
+      Cm(alpha,q) pitching-moment coefficients [-]
+      x_cg, x_ac  centre of gravity and aerodynamic centre [m]
+
+    Places one would look (not numbers to copy blindly):
+      Li, Goodwill, Wang & Ristroph, JFM 2022 (CG location vs glide);
+      Ng et al., AIAA 2009-3958 (paper-dart force coefficients).
+    Until those values are sourced, do not ship a rigid-body mode and
+    do not put placeholder Iy or Cm into config.py.
+
+------------------------------------------------------------------------------------------
+18. OPEN CONFIG DEFAULTS (already chosen so work can proceed)
+------------------------------------------------------------------------------------------
+    window                 1280 x 720
+    pixels_per_metre       83.5
+    sprite_display_length  110 px
+    prelaunch_launcher_x   0.08 of width
+    ground_screen_y0       548
+    follow_x_frac          0.32
+    margin_px              40
+    camera_tau_s           0.12   (0 allowed)
+    V0_range               1.0 .. 12.0 m/s
+    gamma0_range           -40 .. +50 deg
+    V_MIN_STOP             0.05 m/s
+    V_EPS                  1e-9
+    solve rtol/atol        1e-8 / 1e-10  (Reference / validation)
+    TF                     6.0 s
+    H0                     2.0 m
+    max_trails             24
+    max_legend             12
+    MC N                   50
+    MC sigma_V             0.20 m/s     ASSUMPTION
+    MC sigma_gamma         3.0 deg      ASSUMPTION
+    heatmap grid           41 x 31
+    cg_px                  (388, 119)   (re-measure from the alpha mask)
+    launcher_rest_gamma    16.1 deg
+    launcher_pivot_px      (199, 124)
+    PI_HOMEWORK            3.141592
+
+==========================================================================================
+END OF SPECIFICATION
+==========================================================================================

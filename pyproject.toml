@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "paper-airplane-flight-lab"
+version = "0.1.0"
+description = "2D side-view flight lab for Stengel's paper-airplane point-mass model."
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "Sahand Ranjbaripour"},
+]
+dependencies = [
+    "numpy",
+    "scipy",
+    "pygame-ce",
+    "matplotlib",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[project.scripts]
+paper-airplane = "paper_airplane.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
