@@ -6,7 +6,7 @@ A 2D, side-view engineering lab for the point-mass paper airplane in Robert F. S
 
 ![Flight lab window](docs/images/flight_lab.png)
 
-![Dusk field, launcher, and paper dart](docs/images/scene_preview.jpg)
+
 
 ## Features
 
