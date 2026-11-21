@@ -90,6 +90,8 @@ Show plots opens the Matplotlib figures. Export writes PNG and CSV files into `o
 
 ## References
 
+-https://youtube.com/playlist?list=PLC_15c6Jqkffk3kzR83NeFxckuQ8BlfPU&si=TSSnv2SU9efLekK_
+
 - Stengel, R. F. (2005). *Flight Dynamics*. Princeton University Press. Example 1.3-1, Paper Airplane Flight Path.
 - Paper Airplane Simulation: https://stengel.mycpanel.princeton.edu/PaperPlane.html
 - PaperPlane.m (the professor's code): https://stengel.mycpanel.princeton.edu/PaperPlane.m
